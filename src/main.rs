@@ -36,8 +36,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     /* 
     RUNNING DYNAMICAL SIMULATION
     */
-    const n_steps: u32 = 40000;  // TODO: Change this to UPPERCASE or make it a variable
-    let t_end = n_steps as f32 * dt;
+    //const n_steps: u32 = 10000;  // TODO: Change this to UPPERCASE or make it a variable
+    let t_end = 0.25;  // Simulate time in seconds
+    let n_steps: u32 = (t_end / dt).ceil() as u32;
     let steps: Vec<u32> = (0..n_steps+1).collect();
     let mut t: f32;
     let mut p: f32; let mut q: f32;
@@ -47,10 +48,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut thetag_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut p_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut q_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
-    for step in steps {  // TODO: Debug this simulation. Power / Current values seem wonky
+    for step in steps {  // TODO: Debug this simulation. Power / Current values seem wonky. Something to do with the per unitization of theta
         t = step as f32 * dt;
         if t > (t_end / 2.) {
-            dvoc.set_p_ref(1.0);
+            dvoc.set_p_ref(100.0);
         }
 
         // Collect voltage values
@@ -68,11 +69,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         q_values[step as usize] = (t, q);
 
         grid.step_(dt);
-        line.step(dt, [dvoc.kv * dvoc.v, (dvoc.w_nom * dvoc.theta) % (2.*PI), grid.v, grid.theta]);
+        line.step(dt, [dvoc.kv * dvoc.v, (dvoc.w_nom * dvoc.theta) % (2.*PI), 
+                       grid.v_nom * grid.v, (grid.w_nom * grid.theta) % (2.*PI)]);
     }
     println!("v: {}, theta: {}", dvoc.v * dvoc.v_nom, (dvoc.w_nom * dvoc.theta) % (2.*PI));
     println!("ia: {}, ib: {}", line.i_alpha, line.i_beta);
-    println!("vg: {}, thetag: {}", grid.v, grid.theta);
+    println!("vg: {}, thetag: {}", grid.v * grid.v_nom, (grid.w_nom * grid.theta) % (2.*PI));
 
     /* 
     PLOTTING THE RESULTS
@@ -114,7 +116,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     chart
         .draw_series(LineSeries::new(
             vg_values,
-            &RED,
+            &GREEN,
         ))?
         .label("Grid Voltage")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
@@ -122,7 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     chart
         .draw_series(LineSeries::new(
             thetag_values,
-            &BLUE,
+            &BLACK,
         ))?
         .label("Grid Angle")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
@@ -135,7 +137,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     root.present()?;
 
 
-    // Plot the power data
+    /* Plot the power data */
+    // Find the maximum and minimum values of P and Q for plotting ylims
+    let (_,mut ps): (Vec<f32>, Vec<f32>) = p_values.into_iter().unzip();
+    let (_,mut qs): (Vec<_>, Vec<_>) = q_values.into_iter().unzip();
+    ps.append(&mut qs);
+    let min_pq: f32 = ps.iter().fold(0.0f32, |a, &b| a.min(b));
+    let max_pq: f32 = ps.iter().fold(0.0f32, |a, &b| a.max(b));
     let root = BitMapBackend::new(POWER_OUT_FILE_NAME, (640, 480)).into_drawing_area();
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
@@ -143,7 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .margin(5 as u32)
         .x_label_area_size(30 as u32)
         .y_label_area_size(30 as u32)
-        .build_cartesian_2d(0.0f32..t_end, -10.0f32..110.0f32)?;
+        .build_cartesian_2d(0.0f32..t_end, (min_pq-1.)..(max_pq+1.))?;
 
     chart.configure_mesh().draw()?;
 
