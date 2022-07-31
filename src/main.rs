@@ -34,8 +34,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut bus: ACVoltSrc = build_ac_volt_src(v_nom, w_nom, s_rated);
 
     // ODE solver settings
-    let rtol = 1.0e-5; let atol = 1.0e-6;
-    let ode_steps = 20.;
+    let rtol = 1.0e-5; let atol = 1.0e-5;
+    let ode_steps = 5.;
     
     /* 
     RUNNING DYNAMICAL SIMULATION
