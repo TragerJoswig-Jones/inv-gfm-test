@@ -3,16 +3,16 @@
 use std::*;
 use plotters::prelude::*;
 use unifi_gfm::calc::*;
-use unifi_gfm::dvoc::*;
+use unifi_gfm::droop::*;
 use unifi_gfm::refs::*;
 use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
 
-const VOLTAGE_FILE_NAME: &'static str = "images/dvoc_sim_voltage.png";
-const THETA_FILE_NAME: &'static str = "images/dvoc_sim_thetas.png";
-const POWER_OUT_FILE_NAME: &'static str = "images/dvoc_sim_powers.png";
-const CURRENT_OUT_FILE_NAME: &'static str = "images/dvoc_sim_currents.png";
-const DELTA_OUT_FILE_NAME: &'static str = "images/dvoc_sim_deltas.png";
+const VOLTAGE_FILE_NAME: &'static str = "images/droop_sim_voltage.png";
+const THETA_FILE_NAME: &'static str = "images/droop_sim_thetas.png";
+const POWER_OUT_FILE_NAME: &'static str = "images/droop_sim_powers.png";
+const CURRENT_OUT_FILE_NAME: &'static str = "images/droop_sim_currents.png";
+const DELTA_OUT_FILE_NAME: &'static str = "images/droop_sim_deltas.png";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     /* 
     DEFINE SYSTEM PARAMETERS & CONSTRUCT OBJECTS
@@ -22,9 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let w_nom: f32 = f_nom * 2. * PI;
     let s_rated: f32 = 500.;
     let dt: f32 = 1.0e-4_f32;
-    let xi: f32 = 15.;
-    let c: f32 = 0.2679;
-    let mut inv = build_dvoc_controller(v_nom, w_nom, s_rated, xi, c);
+    let mp: f32 = 0.0026;
+    let mq: f32 = 0.005;
+    let w_c: f32 = 2.*PI*30.;
+    let mut inv = build_droop_controller(v_nom, w_nom, s_rated, mp, mq, w_c);
     inv.theta = -dt * 0.47 * w_nom;  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
     inv.v = v_nom * 0.999965;  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
 
