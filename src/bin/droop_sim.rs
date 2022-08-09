@@ -26,8 +26,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mq: f32 = 0.005;
     let w_c: f32 = 2.*PI*30.;
     let mut inv = build_droop_controller(v_nom, w_nom, s_rated, mp, mq, w_c);
-    inv.theta = -dt * 0.47 * w_nom;  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
-    inv.v = v_nom * 0.999965;  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
+    inv.x[(1)] = -dt * 0.47 * w_nom;  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
+    inv.x[(0)] = v_nom * 0.999965;  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
 
     let rf = 0.8;
     let lf = 1.5e-3;
@@ -60,13 +60,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Collect voltage values
-        v_values[step as usize] = (t, inv.v);
-        theta_values[step as usize] = (t, inv.theta);
-        vg_values[step as usize] = (t, bus.v);
-        thetag_values[step as usize] = (t, bus.theta);
-        ia_values[step as usize] = (t, line.i_alpha);
-        ib_values[step as usize] = (t, line.i_beta);
-        let mut delta = inv.theta - bus.theta;
+        v_values[step as usize] = (t, inv.x[(0)]);
+        theta_values[step as usize] = (t, inv.x[(1)]);
+        vg_values[step as usize] = (t, bus.x[(0)]);
+        thetag_values[step as usize] = (t, bus.x[(1)]);
+        ia_values[step as usize] = (t, line.x[(0)]);
+        ib_values[step as usize] = (t, line.x[(1)]);
+        let mut delta = inv.x[(1)] - bus.x[(1)];
         if delta > PI {
             delta = -2.*PI + delta;
         } else if delta < -PI {
@@ -75,24 +75,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         delta_values[step as usize] = (t, delta);
 
         // Step the controller
-        inv.step(dt, [line.i_alpha, line.i_beta]);
+        inv.step(dt, [line.x[(0)], line.x[(1)]]);
 
         // Step the system
         for n in 0..cont_n_steps {
             // Calculate power
-            let v = AlphaBeta::from_polar(inv.v, inv.theta);
-            let i = AlphaBeta::from_ab_(line.i_alpha, line.i_beta);
+            let v = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)]);
+            let i = AlphaBeta::from_ab_(line.x[(0)], line.x[(1)]);
             (p, q) = calc_ab_power(v, i);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p);
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q);
             bus.step_(cont_dt);
-            line.step(cont_dt, [inv.v, inv.theta, 
-                                   bus.v, bus.theta]);
+            line.step(cont_dt, [inv.x[(0)], inv.x[(1)], 
+                                  bus.x[(0)], bus.x[(1)]]);
         }
     }
-    println!("v: {}, theta: {}", inv.v, inv.theta);
-    println!("ia: {}, ib: {}", line.i_alpha, line.i_beta);
-    println!("vg: {}, thetag: {}", bus.v, bus.theta);
+    println!("v: {}, theta: {}", inv.x[(0)], inv.x[(1)]);
+    println!("ia: {}, ib: {}", line.x[(0)], line.x[(1)]);
+    println!("vg: {}, thetag: {}", bus.x[(0)], bus.x[(1)]);
     println!("p: {}, q: {}", p, q);
 
     /* 
