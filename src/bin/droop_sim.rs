@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mq: f32 = 0.005;
     let w_c: f32 = 2.*PI*30.;
     let mut inv = build_droop_controller(v_nom, w_nom, s_rated, mp, mq, w_c);
-    inv.x[(1)] = -dt * 0.47 * w_nom;  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
+    inv.x[(1)] = dt * 0.53 * w_nom;  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
     inv.x[(0)] = v_nom * 0.999965;  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
 
     let rf = 0.8;
@@ -44,6 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let steps: Vec<u32> = (0..n_steps+1).collect();
     let mut t: f32;
     let mut p: f32 = 0.; let mut q: f32 = 0.;
+    let mut delta: f32; let mut i_alpha_sample: f32; let mut i_beta_sample: f32;
     let mut v_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut theta_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut vg_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
@@ -66,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         thetag_values[step as usize] = (t, bus.x[(1)]);
         ia_values[step as usize] = (t, line.x[(0)]);
         ib_values[step as usize] = (t, line.x[(1)]);
-        let mut delta = inv.x[(1)] - bus.x[(1)];
+        delta = inv.x[(1)] - bus.x[(1)];
         if delta > PI {
             delta = -2.*PI + delta;
         } else if delta < -PI {
@@ -74,8 +75,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         delta_values[step as usize] = (t, delta);
 
-        // Step the controller
-        inv.step(dt, [line.x[(0)], line.x[(1)]]);
+        // Sample the current
+        i_alpha_sample = line.x[(0)];
+        i_beta_sample = line.x[(1)];
 
         // Step the system
         for n in 0..cont_n_steps {
@@ -87,18 +89,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q);
             bus.step_(cont_dt);
             line.step(cont_dt, [inv.x[(0)], inv.x[(1)], 
-                                  bus.x[(0)], bus.x[(1)]]);
+                                bus.x[(0)], bus.x[(1)]]);
         }
-    }
-    println!("v: {}, theta: {}", inv.x[(0)], inv.x[(1)]);
-    println!("ia: {}, ib: {}", line.x[(0)], line.x[(1)]);
-    println!("vg: {}, thetag: {}", bus.x[(0)], bus.x[(1)]);
-    println!("p: {}, q: {}", p, q);
+
+        // Step the controller after a z^-1 delay
+        inv.step(dt, [i_alpha_sample, i_beta_sample]);
+        }
+        println!("v: {}, theta: {}", inv.x[(0)], inv.x[(1)]);
+        println!("ia: {}, ib: {}", line.x[(0)], line.x[(1)]);
+        println!("vg: {}, thetag: {}", bus.x[(0)], bus.x[(1)]);
+        println!("p: {}, q: {}", p, q);
 
     /* 
     PLOTTING THE RESULTS
     */
-
     let v_values_ = v_values.to_vec();
     let theta_values_ = theta_values.to_vec();
     let vg_values_ = vg_values.to_vec();
