@@ -31,8 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rf = 0.8;
     let lf = 1.5e-3;
-    let mut line: RLFilter = build_rl_line(w_nom, s_rated, rf, lf);
-    let mut bus: ACVoltSrc = build_ac_volt_src(v_nom, w_nom, s_rated);
+    let mut line: RLFilter<f32> = build_rl_line(w_nom, s_rated, rf, lf);
+    let mut bus: ACVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom, s_rated);
 
     /*
     RUNNING DYNAMICAL SIMULATION
@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for n in 0..cont_n_steps {
             // Calculate power
             let v = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)]);
-            let i = AlphaBeta::from_ab_(line.x[(0)], line.x[(1)]);
+            let i = AlphaBeta::<f32>::from_ab_(line.x[(0)], line.x[(1)]);
             (p, q) = calc_ab_power(v, i);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p);
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q);
