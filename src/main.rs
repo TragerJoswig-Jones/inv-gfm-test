@@ -1,12 +1,15 @@
 // #![no_std]
 
 use std::*;
+use fixed::traits::LossyInto;
 use plotters::prelude::*;
 use unifi_gfm::calc::*;
 use unifi_gfm::dvoc::*;
 use unifi_gfm::refs::*;
 use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
+use fixed::traits::FromFixed;
+type FxdNum = fixed::types::I16F16;
 
 const VOLTAGE_FILE_NAME: &'static str = "images/dvoc_sim_voltage.png";
 const THETA_FILE_NAME: &'static str = "images/dvoc_sim_thetas.png";
@@ -19,19 +22,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     */
     let v_nom: f32 = 80.;
     let f_nom: f32 = 60.;
-    let w_nom: f32 = f_nom * 2. * PI;
+    let f_nom: f32 = f_nom;
     let s_rated: f32 = 500.;
     let dt: f32 = 1.0e-4_f32;
     let xi: f32 = 15.;
     let c: f32 = 0.2679;
-    let mut inv = build_dvoc_controller(v_nom, w_nom, s_rated, xi, c);
-    inv.x[(1)] = dt * 0.53 * w_nom;  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
-    inv.x[(0)] = v_nom * 0.999965;  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
+    let pi: f32 = PI.lossy_into();
+    let mut inv = build_dvoc_controller_from_flt::<FxdNum>(v_nom, f_nom, s_rated, xi, c);
+    inv.x[(1)] = FxdNum::from_num(dt * 0.53) * inv.w_nom;  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
+    inv.x[(0)] = FxdNum::from_num(v_nom * 0.999965);  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
 
     let rf = 0.8;
     let lf = 1.5e-3;
-    let mut line: RLFilter<f32> = build_rl_line(w_nom, s_rated, rf, lf);
-    let mut bus: ACVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom, s_rated);
+    let mut line: RLFilter<FxdNum> = build_rl_line_from_flt(f_nom, s_rated, rf, lf);
+    let mut bus: ACVoltSrc<FxdNum> = build_ac_volt_src_from_flt(v_nom, f_nom, s_rated);
 
     /*
     RUNNING DYNAMICAL SIMULATION
@@ -41,9 +45,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cont_n_steps = 20;  // Number of steps taken for 'continuous' dynamics for each digital step
     let cont_dt = dt / (cont_n_steps as f32);
     let steps: Vec<u32> = (0..n_steps+1).collect();
-    let mut t: f32;
-    let mut p: f32 = 0.; let mut q: f32 = 0.;
-    let mut delta: f32; let mut i_alpha_sample: f32; let mut i_beta_sample: f32;
+    let mut t: f32; let dt_: FxdNum = FxdNum::from_num(dt); let cont_dt_: FxdNum = FxdNum::from_num(cont_dt);
+    let mut p: FxdNum = FxdNum::from_fixed(ZERO); let mut q: FxdNum = FxdNum::from_fixed(ZERO);
+    let mut delta: f32; let mut i_alpha_sample: FxdNum; let mut i_beta_sample: FxdNum;
     let mut v_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut theta_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut vg_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
@@ -53,24 +57,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut q_values: Vec<(f32, f32)> = vec![(0., 0.); ((n_steps+1)*cont_n_steps) as usize];
     let mut ia_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut ib_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
-    for step in steps {
+    for step in steps {  // TODO: Debug this to see where the overflow occurs...
         t = step as f32 * dt;
         if t > (t_end / 2.) {
-            inv.set_p_ref(100.0);
+            inv.set_p_ref(FxdNum::from_num(100.0));
         }
 
         // Collect voltage values
-        v_values[step as usize] = (t, inv.x[(0)]);
-        theta_values[step as usize] = (t, inv.x[(1)]);
-        vg_values[step as usize] = (t, bus.x[(0)]);
-        thetag_values[step as usize] = (t, bus.x[(1)]);
-        ia_values[step as usize] = (t, line.x[(0)]);
-        ib_values[step as usize] = (t, line.x[(1)]);
-        delta = inv.x[(1)] - bus.x[(1)];
-        if delta > PI {
-            delta = -2.*PI + delta;
-        } else if delta < -PI {
-            delta = 2.*PI + delta;
+        v_values[step as usize] = (t, inv.x[(0)].lossy_into());
+        theta_values[step as usize] = (t, inv.x[(1)].lossy_into());
+        vg_values[step as usize] = (t, bus.x[(0)].lossy_into());
+        thetag_values[step as usize] = (t, bus.x[(1)].lossy_into());
+        ia_values[step as usize] = (t, line.x[(0)].lossy_into());
+        ib_values[step as usize] = (t, line.x[(1)].lossy_into());
+        delta = (inv.x[(1)] - bus.x[(1)]).lossy_into();
+        if delta > pi {
+            delta = -2.*pi + delta;
+        } else if delta < -pi {
+            delta = 2.*pi + delta;
         }
         delta_values[step as usize] = (t, delta);
 
@@ -82,17 +86,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for n in 0..cont_n_steps {
             // Calculate power
             let v = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)]);
-            let i = AlphaBeta::<f32>::from_ab_(line.x[(0)], line.x[(1)]);
+            let i = AlphaBeta::<FxdNum>::from_ab_(line.x[(0)], line.x[(1)]);
             (p, q) = calc_ab_power(v, i);
-            p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p);
-            q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q);
-            bus.step_(cont_dt);
-            line.step(cont_dt, [inv.x[(0)], inv.x[(1)], 
+            p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p.lossy_into());
+            q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q.lossy_into());
+            bus.step_(cont_dt_);
+            line.step(cont_dt_, [inv.x[(0)], inv.x[(1)], 
                                   bus.x[(0)], bus.x[(1)]]);
         }
 
         // Step the controller after a z^-1 delay
-        inv.step(dt, [i_alpha_sample, i_beta_sample]);
+        inv.step(dt_, [i_alpha_sample, i_beta_sample]);
     }
     println!("v: {}, theta: {}", inv.x[(0)], inv.x[(1)]);
     println!("ia: {}, ib: {}", line.x[(0)], line.x[(1)]);
