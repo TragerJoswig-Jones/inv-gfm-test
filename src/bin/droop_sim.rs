@@ -10,7 +10,7 @@ use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
 use fixed::traits::FromFixed;
 type FxdSim = fixed::types::I32F32;
-type FxdNum = fixed::types::I32F32; // TODO: Test with 32-bit fixed-point number and figure out what is overflowing (Seems to be related to current dynamics)
+type FxdNum = fixed::types::I10F22;  // TODO: Work on getting 32-bit fixed-point numbers to be accurate enough for the droop controller
 
 const VOLTAGE_FILE_NAME: &'static str = "images/droop_sim_voltage.png";
 const THETA_FILE_NAME: &'static str = "images/droop_sim_thetas.png";
@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         delta = (inv.x[(1)] - FxdNum::from_fixed(bus.x[(1)])).lossy_into();
         if delta > (1. / f_nom) {
             delta = -(1. / f_nom) + delta;
-        } else if delta < -(1. / f_nom - 1.0e-4) {
+        } else if delta < -(1. / f_nom - 5.0e-4) {
             delta = (1. / f_nom) + delta;
         }
         delta_values[step as usize] = (t, delta);

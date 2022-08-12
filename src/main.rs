@@ -10,7 +10,7 @@ use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
 use fixed::traits::FromFixed;
 type FxdSim = fixed::types::I38F26;
-type FxdNum = fixed::types::I38F26; // TODO: Test with 32-bit fixed-point number and figure out what is overflowing (Seems to be related to current dynamics)
+type FxdNum = fixed::types::I10F22; // TODO: Test with 32-bit fixed-point number and figure out what is overflowing (Seems to be related to current dynamics)
 // TODO: Test how fast this runs with the package having a single fixed-point value selected (No / fewer conversions to fixed). 
 // Currently running this sim with I32F32 values takes ~20s
 
@@ -84,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         delta = (inv.x[(1)] - FxdNum::from_fixed(bus.x[(1)])).lossy_into();
         if delta > (1. / f_nom) {
             delta = -(1. / f_nom) + delta;
-        } else if delta < -(1. / f_nom - 1.0e-4) {
+        } else if delta < -(1. / f_nom - 5.0e-4) {
             delta = (1. / f_nom) + delta;
         }
         delta_values[step as usize] = (t, delta);
