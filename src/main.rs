@@ -9,9 +9,13 @@ use unifi_gfm::refs::*;
 use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
 use fixed::traits::FromFixed;
-type FxdNum = fixed::types::I32F32; // TODO: Test with 32-bit fixed-point number and figure out what is overflowing (Seems to be related to current dynamics)
+type FxdSim = fixed::types::I32F32;
+type FxdNum = fixed::types::I38F26; // TODO: Test with 32-bit fixed-point number and figure out what is overflowing (Seems to be related to current dynamics)
 // TODO: Test how fast this runs with the package having a single fixed-point value selected (No / fewer conversions to fixed). 
 // Currently running this sim with I32F32 values takes ~20s
+
+// NOTE:    A 26-bit fractional seems to be the minimal number that results in fairly accurate power tracking / smaller oscillations at steady-state.
+//          Oscillations seem to be due to lossy conversions in the simulation, and power tracking errors are due to inaccuracies in current dynamics.
 
 const VOLTAGE_FILE_NAME: &'static str = "images/dvoc_sim_voltage.png";
 const THETA_FILE_NAME: &'static str = "images/dvoc_sim_thetas.png";
@@ -19,6 +23,8 @@ const POWER_OUT_FILE_NAME: &'static str = "images/dvoc_sim_powers.png";
 const CURRENT_OUT_FILE_NAME: &'static str = "images/dvoc_sim_currents.png";
 const DELTA_OUT_FILE_NAME: &'static str = "images/dvoc_sim_deltas.png";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env::set_var("RUST_BACKTRACE", "1");  // Enable backtrace for identifying overflow errors 
+
     /*
     DEFINE SYSTEM PARAMETERS & CONSTRUCT OBJECTS
     */
@@ -33,14 +39,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let z_base = 3. * v_nom * v_nom / s_rated;
 
-    let mut inv = build_dvoc_controller_from_flt::<FxdNum>(v_nom, f_nom, s_rated, xi, c);
+    let mut inv = build_dvoc_controller_from_flt::<FxdNum>(v_nom, f_nom, xi, c);
     inv.x[(1)] = FxdNum::from_num(dt * 0.53);  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
     inv.x[(0)] = FxdNum::from_num(0.999965);  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
 
     let rf = 0.8;
     let lf = 1.5e-3;
-    let mut line: RLFilter<FxdNum> = build_rl_line_from_flt(f_nom, rf / z_base, lf / z_base);
-    let mut bus: ACVoltSrc<FxdNum> = build_ac_volt_src_from_flt(v_nom, f_nom, s_rated);
+    let mut line: RLFilter<FxdSim> = build_rl_line_from_flt(f_nom, rf / z_base, lf / z_base);
+    let mut bus: ACVoltSrc<FxdSim> = build_ac_volt_src_from_flt(v_nom, f_nom);
 
     /*
     RUNNING DYNAMICAL SIMULATION
@@ -50,8 +56,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cont_n_steps = 20;  // Number of steps taken for 'continuous' dynamics for each digital step
     let cont_dt = dt / (cont_n_steps as f32);
     let steps: Vec<u32> = (0..n_steps+1).collect();
-    let mut t: f32; let dt_: FxdNum = FxdNum::from_num(dt); let cont_dt_: FxdNum = FxdNum::from_num(cont_dt);
-    let mut p: FxdNum = FxdNum::from_fixed(ZERO); let mut q: FxdNum = FxdNum::from_fixed(ZERO);
+    let mut t: f32; let dt_: FxdNum = FxdNum::from_num(dt); let cont_dt_: FxdSim = FxdSim::from_num(cont_dt);
+    let mut p: FxdSim = FxdSim::from_fixed(ZERO); let mut q: FxdSim = FxdSim::from_fixed(ZERO);
     let mut delta: f32; let mut i_alpha_sample: FxdNum; let mut i_beta_sample: FxdNum;
     let mut v_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut theta_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
@@ -65,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for step in steps {  // TODO: Debug this to see where the overflow occurs...
         t = step as f32 * dt;
         if t > (t_end / 2.) {
-            inv.set_p_ref(FxdNum::from_num(1000.0));
+            inv.set_p_ref(FxdNum::from_num(1.0));
         }
 
         // Collect voltage values
@@ -75,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         thetag_values[step as usize] = (t, bus.x[(1)].lossy_into());
         ia_values[step as usize] = (t, line.x[(0)].lossy_into());
         ib_values[step as usize] = (t, line.x[(1)].lossy_into());
-        delta = (inv.x[(1)] - bus.x[(1)]).lossy_into();
+        delta = (inv.x[(1)] - FxdNum::from_fixed(bus.x[(1)])).lossy_into();
         if delta > (1. / f_nom) {
             delta = -(1. / f_nom) + delta;
         } else if delta < -(1. / f_nom - 1.0e-4) {
@@ -84,19 +90,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         delta_values[step as usize] = (t, delta);
 
         // Sample the current
-        i_alpha_sample = line.x[(0)];
-        i_beta_sample = line.x[(1)];
+        i_alpha_sample = FxdNum::from_fixed(line.x[(0)]);
+        i_beta_sample = FxdNum::from_fixed(line.x[(1)]);
 
         // Step the system
         for n in 0..cont_n_steps {
             // Calculate power
-            let v = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)] * inv.w_nom);
-            let i = AlphaBeta::<FxdNum>::from_ab_(line.x[(0)], line.x[(1)]);
+            let v = AlphaBeta::from_polar(FxdSim::from_fixed(inv.x[(0)]), FxdSim::from_fixed(inv.x[(1)] * inv.w_nom));
+            let i = AlphaBeta::<FxdSim>::from_ab_(line.x[(0)], line.x[(1)]);
             (p, q) = calc_ab_power(v, i);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p.lossy_into());
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q.lossy_into());
             bus.step_(cont_dt_);
-            line.step(cont_dt_, [inv.x[(0)], inv.x[(1)] * inv.w_nom, 
+            line.step(cont_dt_, [FxdSim::from_fixed(inv.x[(0)]), FxdSim::from_fixed(inv.x[(1)] * inv.w_nom), 
                                   bus.x[(0)], bus.x[(1)] * bus.w_nom]);
         }
 

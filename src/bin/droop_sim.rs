@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rf = 0.8;
     let lf = 1.5e-3;
     let mut line: RLFilter<Fxd> = build_rl_line_from_flt(f_nom, rf, lf);
-    let mut bus: ACVoltSrc<Fxd> = build_ac_volt_src_from_flt(v_nom, f_nom, s_rated);
+    let mut bus: ACVoltSrc<Fxd> = build_ac_volt_src_from_flt(v_nom, f_nom);
 
     /*
     RUNNING DYNAMICAL SIMULATION
