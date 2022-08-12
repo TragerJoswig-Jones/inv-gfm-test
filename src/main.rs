@@ -9,7 +9,7 @@ use unifi_gfm::refs::*;
 use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
 use fixed::traits::FromFixed;
-type FxdSim = fixed::types::I32F32;
+type FxdSim = fixed::types::I38F26;
 type FxdNum = fixed::types::I38F26; // TODO: Test with 32-bit fixed-point number and figure out what is overflowing (Seems to be related to current dynamics)
 // TODO: Test how fast this runs with the package having a single fixed-point value selected (No / fewer conversions to fixed). 
 // Currently running this sim with I32F32 values takes ~20s
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let f_nom: f32 = 60.;
     let f_nom: f32 = f_nom;
     let s_rated: f32 = 1000.;
-    let dt: f32 = 1.0e-4_f32;
+    let dt: f32 = 2.0e-4_f32;
     let xi: f32 = 15.;
     let c: f32 = 0.2679;
     let _pi: f32 = PI.lossy_into();
