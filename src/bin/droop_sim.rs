@@ -10,7 +10,7 @@ use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
 use fixed::traits::FromFixed;
 type FxdSim = fixed::types::I32F32;
-type FxdNum = fixed::types::I10F22;  // TODO: Work on getting 32-bit fixed-point numbers to be accurate enough for the droop controller
+type FxdNum = fixed::types::I8F24;  // TODO: Work on getting 32-bit fixed-point numbers to be accurate enough for the droop controller
 
 const VOLTAGE_FILE_NAME: &'static str = "images/droop_sim_voltage.png";
 const THETA_FILE_NAME: &'static str = "images/droop_sim_thetas.png";
@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let w_nom: f32 = f_nom * 2.*pi;
     let s_rated: f32 = 1000.;
     let z_base = 3. * v_nom * v_nom / s_rated;
-    let dt: f32 = 1.0e-4_f32;
+    let dt: f32 = 1.0e-4_f32;  // 10 kHz switching frequency
     let mp: f32 = 0.0026; // / w_nom;  // Does this coefficient need to be per-unitized?
     let mq: f32 = 0.005; // / v_nom;   // Does this coefficient need to be per-unitized?
     let f_c: f32 = 30.;  // Does this filter frequency need to be per-unitized?
@@ -90,14 +90,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Step the system
         for n in 0..cont_n_steps {
             // Calculate power
-            let v = AlphaBeta::from_polar(FxdSim::from_fixed(inv.x[(0)]), FxdSim::from_fixed(inv.x[(1)] * inv.w_nom));
+            let v = AlphaBeta::from_polar(FxdSim::from_fixed(inv.x[(0)]), FxdSim::from_fixed(TWO)*FxdSim::from_fixed(PI) * FxdSim::from_fixed(inv.x[(1)] * inv.f_nom));
             let i = AlphaBeta::<FxdSim>::from_ab_(line.x[(0)], line.x[(1)]);
             (p, q) = calc_ab_power(v, i);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p.lossy_into());
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q.lossy_into());
             bus.step_(cont_dt_);
-            line.step(cont_dt_, [FxdSim::from_fixed(inv.x[(0)]), FxdSim::from_fixed(inv.x[(1)] * inv.w_nom), 
-                                  bus.x[(0)], bus.x[(1)] * bus.w_nom]);
+            line.step(cont_dt_, [FxdSim::from_fixed(inv.x[(0)]), FxdSim::from_fixed(TWO)*FxdSim::from_fixed(PI) * FxdSim::from_fixed(inv.x[(1)] * inv.f_nom), 
+                                  bus.x[(0)], FxdSim::from_fixed(TWO)*FxdSim::from_fixed(PI) * bus.x[(1)] * bus.f_nom]);
         }
 
         // Step the controller after a z^-1 delay

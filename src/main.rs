@@ -9,8 +9,8 @@ use unifi_gfm::refs::*;
 use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
 use fixed::traits::FromFixed;
-type FxdSim = fixed::types::I38F26;
-type FxdNum = fixed::types::I10F22; // TODO: Test with 32-bit fixed-point number and figure out what is overflowing (Seems to be related to current dynamics)
+type FxdSim = fixed::types::I32F32;
+type FxdNum = fixed::types::I8F24; // TODO: Test with 32-bit fixed-point number and figure out what is overflowing (Seems to be related to current dynamics)
 // TODO: Test how fast this runs with the package having a single fixed-point value selected (No / fewer conversions to fixed). 
 // Currently running this sim with I32F32 values takes ~20s
 
@@ -30,9 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     */
     let v_nom: f32 = 80.;
     let f_nom: f32 = 60.;
-    let f_nom: f32 = f_nom;
     let s_rated: f32 = 1000.;
-    let dt: f32 = 2.0e-4_f32;
+    let dt: f32 = 1.0e-4_f32;  // 10 kHz switching frequency
     let xi: f32 = 15.;
     let c: f32 = 0.2679;
     let _pi: f32 = PI.lossy_into();
@@ -96,14 +95,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Step the system
         for n in 0..cont_n_steps {
             // Calculate power
-            let v = AlphaBeta::from_polar(FxdSim::from_fixed(inv.x[(0)]), FxdSim::from_fixed(inv.x[(1)] * inv.w_nom));
+            let v = AlphaBeta::from_polar(FxdSim::from_fixed(inv.x[(0)]), FxdSim::from_fixed(TWO)*FxdSim::from_fixed(PI) * FxdSim::from_fixed(inv.x[(1)] * inv.f_nom));
             let i = AlphaBeta::<FxdSim>::from_ab_(line.x[(0)], line.x[(1)]);
             (p, q) = calc_ab_power(v, i);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p.lossy_into());
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q.lossy_into());
             bus.step_(cont_dt_);
-            line.step(cont_dt_, [FxdSim::from_fixed(inv.x[(0)]), FxdSim::from_fixed(inv.x[(1)] * inv.w_nom), 
-                                  bus.x[(0)], bus.x[(1)] * bus.w_nom]);
+            line.step(cont_dt_, [FxdSim::from_fixed(inv.x[(0)]), FxdSim::from_fixed(TWO)*FxdSim::from_fixed(PI) * FxdSim::from_fixed(inv.x[(1)] * inv.f_nom), 
+                                  bus.x[(0)], FxdSim::from_fixed(TWO)*FxdSim::from_fixed(PI) * bus.x[(1)] * bus.f_nom]);  // TODO: Determine why FxdSim::from_fixed(TWO*PI) overflows...
         }
 
         // Step the controller after a z^-1 delay
