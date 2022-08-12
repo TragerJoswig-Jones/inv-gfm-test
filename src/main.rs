@@ -9,7 +9,9 @@ use unifi_gfm::refs::*;
 use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
 use fixed::traits::FromFixed;
-type FxdNum = fixed::types::I16F16;
+type FxdNum = fixed::types::I32F32; // TODO: Test with 32-bit fixed-point number and figure out what is overflowing (Seems to be related to current dynamics)
+// TODO: Test how fast this runs with the package having a single fixed-point value selected (No / fewer conversions to fixed). 
+// Currently running this sim with I32F32 values takes ~20s
 
 const VOLTAGE_FILE_NAME: &'static str = "images/dvoc_sim_voltage.png";
 const THETA_FILE_NAME: &'static str = "images/dvoc_sim_thetas.png";
@@ -17,24 +19,27 @@ const POWER_OUT_FILE_NAME: &'static str = "images/dvoc_sim_powers.png";
 const CURRENT_OUT_FILE_NAME: &'static str = "images/dvoc_sim_currents.png";
 const DELTA_OUT_FILE_NAME: &'static str = "images/dvoc_sim_deltas.png";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /* 
+    /*
     DEFINE SYSTEM PARAMETERS & CONSTRUCT OBJECTS
     */
     let v_nom: f32 = 80.;
     let f_nom: f32 = 60.;
     let f_nom: f32 = f_nom;
-    let s_rated: f32 = 500.;
+    let s_rated: f32 = 1000.;
     let dt: f32 = 1.0e-4_f32;
     let xi: f32 = 15.;
     let c: f32 = 0.2679;
-    let pi: f32 = PI.lossy_into();
+    let _pi: f32 = PI.lossy_into();
+
+    let z_base = 3. * v_nom * v_nom / s_rated;
+
     let mut inv = build_dvoc_controller_from_flt::<FxdNum>(v_nom, f_nom, s_rated, xi, c);
-    inv.x[(1)] = FxdNum::from_num(dt * 0.53) * inv.w_nom;  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
-    inv.x[(0)] = FxdNum::from_num(v_nom * 0.999965);  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
+    inv.x[(1)] = FxdNum::from_num(dt * 0.53);  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
+    inv.x[(0)] = FxdNum::from_num(0.999965);  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
 
     let rf = 0.8;
     let lf = 1.5e-3;
-    let mut line: RLFilter<FxdNum> = build_rl_line_from_flt(f_nom, s_rated, rf, lf);
+    let mut line: RLFilter<FxdNum> = build_rl_line_from_flt(f_nom, rf / z_base, lf / z_base);
     let mut bus: ACVoltSrc<FxdNum> = build_ac_volt_src_from_flt(v_nom, f_nom, s_rated);
 
     /*
@@ -60,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for step in steps {  // TODO: Debug this to see where the overflow occurs...
         t = step as f32 * dt;
         if t > (t_end / 2.) {
-            inv.set_p_ref(FxdNum::from_num(100.0));
+            inv.set_p_ref(FxdNum::from_num(1000.0));
         }
 
         // Collect voltage values
@@ -71,10 +76,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ia_values[step as usize] = (t, line.x[(0)].lossy_into());
         ib_values[step as usize] = (t, line.x[(1)].lossy_into());
         delta = (inv.x[(1)] - bus.x[(1)]).lossy_into();
-        if delta > pi {
-            delta = -2.*pi + delta;
-        } else if delta < -pi {
-            delta = 2.*pi + delta;
+        if delta > (1. / f_nom) {
+            delta = -(1. / f_nom) + delta;
+        } else if delta < -(1. / f_nom - 1.0e-4) {
+            delta = (1. / f_nom) + delta;
         }
         delta_values[step as usize] = (t, delta);
 
@@ -85,14 +90,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Step the system
         for n in 0..cont_n_steps {
             // Calculate power
-            let v = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)]);
+            let v = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)] * inv.w_nom);
             let i = AlphaBeta::<FxdNum>::from_ab_(line.x[(0)], line.x[(1)]);
             (p, q) = calc_ab_power(v, i);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p.lossy_into());
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q.lossy_into());
             bus.step_(cont_dt_);
-            line.step(cont_dt_, [inv.x[(0)], inv.x[(1)], 
-                                  bus.x[(0)], bus.x[(1)]]);
+            line.step(cont_dt_, [inv.x[(0)], inv.x[(1)] * inv.w_nom, 
+                                  bus.x[(0)], bus.x[(1)] * bus.w_nom]);
         }
 
         // Step the controller after a z^-1 delay
@@ -103,7 +108,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("vg: {}, thetag: {}", bus.x[(0)], bus.x[(1)]);
     println!("p: {}, q: {}", p, q);
 
-    /* 
+    /*
     PLOTTING THE RESULTS
     */
 
