@@ -3,7 +3,7 @@
 use std::*;
 use plotters::prelude::*;
 use unifi_gfm::calc::*;
-use unifi_gfm::dvoc::*;
+use unifi_gfm::gfm::*;
 use unifi_gfm::refs::*;
 use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
@@ -24,12 +24,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dt: f32 = 1.0e-4_f32;
     let xi: f32 = 15.;
     let c: f32 = 0.2679;
+    let gamma: f32 = 1.; 
 
     let z_base = 3. * v_nom * v_nom / s_rated;
 
     let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c);
-    inv.x[(1)] = dt * 0.53;  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
-    inv.x[(0)] = 0.999965;  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
+    inv.x[(1)] = 0.003;  // Initialize inverter angle to be off from the grid
+    inv.x[(0)] = 1.1;  // Initialize inverter voltage
+    let mut gfm = build_gfm(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
 
     let rf = 0.8;
     let lf = 1.5e-3;
@@ -39,14 +41,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     /*
     RUNNING DYNAMICAL SIMULATION
     */
+    // Simulation settings
     let t_end = 0.5;  // Simulate time in seconds
+    let t_step = t_end / 2.; // Active power reference step time
+    let t_switch = 0.1;  // Grid-side switch time
     let n_steps: u32 = (t_end / dt).ceil() as u32;
     let cont_n_steps = 20;  // Number of steps taken for 'continuous' dynamics for each digital step
     let cont_dt = dt / (cont_n_steps as f32);
     let steps: Vec<u32> = (0..n_steps+1).collect();
+    // Initialize simulation variables
     let mut t: f32;
-    let mut p: f32 = 0.; let mut q: f32 = 0.;
-    let mut delta: f32; let mut i_alpha_sample: f32; let mut i_beta_sample: f32;
+    let mut p: f32 = 0.; let mut q: f32 = 0.; let mut delta: f32; 
+    let mut i_alpha_sample: f32; let mut i_beta_sample: f32;
+    let mut v_grid_sample: f32; let mut theta_grid_sample: f32;
+    let mut v_grid: f32; let mut theta_grid: f32; let mut v_inv: [f32; 2];
+    // Simulation data vectors
     let mut v_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut theta_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut vg_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
@@ -58,21 +67,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ib_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     for step in steps {  // TODO: Debug this to see where the overflow occurs...
         t = step as f32 * dt;
-        if t > (t_end / 2.) {
-            inv.set_p_ref(1.0);
+        if t > t_step {
+            gfm.set_p_ref(1.0);
         }
 
         // Collect voltage values
-        v_values[step as usize] = (t, inv.x[(0)]);
-        theta_values[step as usize] = (t, inv.x[(1)]);
+        v_inv = gfm.get_pu_voltage();
+        v_values[step as usize] = (t, v_inv[0]);
+        theta_values[step as usize] = (t, v_inv[1]);
         vg_values[step as usize] = (t, bus.x[(0)]);
         thetag_values[step as usize] = (t, bus.x[(1)]);
         ia_values[step as usize] = (t, line.x[(0)]);
         ib_values[step as usize] = (t, line.x[(1)]);
-        delta = inv.x[(1)] - bus.x[(1)];
+        delta = v_inv[1] - bus.x[(1)];
         if delta > (1. / f_nom) {
             delta = -(1. / f_nom) + delta;
-        } else if delta < -(1. / f_nom - 5.0e-4) {
+        } else if delta < -(1. / f_nom - 1.0e-4) {
             delta = (1. / f_nom) + delta;
         }
         delta_values[step as usize] = (t, delta);
@@ -80,22 +90,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Sample the current
         i_alpha_sample = line.x[(0)];
         i_beta_sample = line.x[(1)];
+        v_grid_sample = bus.x[(0)];
+        theta_grid_sample = bus.x[(1)] * bus.w_nom;
+        let v_grid_alpha_beta = AlphaBeta::from_polar(v_grid_sample, theta_grid_sample);
 
         // Step the system
         for n in 0..cont_n_steps {
             // Calculate power
-            let v = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)] * inv.w_nom);
+            let v = AlphaBeta::from_polar(v_inv[0], v_inv[1] * gfm.ctrl.get_w_nom());
             let i = AlphaBeta::from_ab_(line.x[(0)], line.x[(1)]);
             (p, q) = calc_ab_power(v, i);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p);
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q);
+            
+            // Step the system
+            if t > t_switch {  // Get inductor grid-side voltage based on switch state
+                gfm.disable_presync();
+                v_grid = bus.x[(0)];  // TODO: rename this for clarity
+                theta_grid = bus.x[(1)] * bus.w_nom;
+            } else {
+                v_grid = v_inv[0];
+                theta_grid = v_inv[1] * gfm.ctrl.get_w_nom();
+            }
+            line.step(cont_dt, [v_inv[0], v_inv[1] * gfm.ctrl.get_w_nom(), 
+                                   v_grid, theta_grid]);
             bus.step_(cont_dt);
-            line.step(cont_dt, [inv.x[(0)], inv.x[(1)] * inv.w_nom, 
-                                  bus.x[(0)], bus.x[(1)] * bus.w_nom]);
         }
 
         // Step the controller after a z^-1 delay
-        inv.step(dt, [i_alpha_sample, i_beta_sample]);
+        gfm.gfm_step(dt, [i_alpha_sample, i_beta_sample], [v_grid_alpha_beta.alpha, v_grid_alpha_beta.beta]);
     }
     println!("v: {}, theta: {}", inv.x[(0)], inv.x[(1)]);
     println!("ia: {}, ib: {}", line.x[(0)], line.x[(1)]);
