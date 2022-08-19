@@ -753,6 +753,8 @@ dependencies = [
 name = "unifi-gfm-test"
 version = "0.1.0"
 dependencies = [
+ "libm",
+ "nalgebra",
  "plotters",
  "unifi-gfm",
 ]
