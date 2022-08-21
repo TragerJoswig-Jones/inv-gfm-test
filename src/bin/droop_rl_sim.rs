@@ -14,6 +14,7 @@ const POWER_OUT_FILE_NAME: &'static str = "images/droop_rl_sim_powers.png";
 const CURRENT_OUT_FILE_NAME: &'static str = "images/droop_rl_sim_currents.png";
 const DELTA_OUT_FILE_NAME: &'static str = "images/droop_rl_sim_deltas.png";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env::set_var("RUST_BACKTRACE", "1");  // Enable backtrace for identifying overflow errors //TODO: Remove this after testing
     /*
     DEFINE SYSTEM PARAMETERS & CONSTRUCT OBJECTS
     */
@@ -34,8 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let z_base = 3. * v_nom * v_nom / s_rated;
 
     let mut inv = build_droop_controller(v_nom, w_nom, mp, mq, w_c);
-    inv.x[(1)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
-    inv.x[(0)] = 1.1;  // Initialize inverter voltage to be off from v_nom to test presync
+    inv.x[(0)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
     let mut gfm = build_gfm(&mut inv, gamma);  // Place the droop controller within a GFM interface object
 
     let mut line: RlBranch<f32> = build_rl_branch(w_nom, rf / z_base, lf / z_base);
@@ -84,9 +84,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ia_values[step as usize] = (t, line.x[(0)]);
         ib_values[step as usize] = (t, line.x[(1)]);
         delta = v_inv[1] - bus.x[(1)];
-        if delta > (1. / f_nom) {
+        if delta > (1. / f_nom - 2.0e-4) {
             delta = -(1. / f_nom) + delta;
-        } else if delta < -(1. / f_nom - 1.0e-4) {
+        } else if delta < -(1. / f_nom - 2.0e-4) {
             delta = (1. / f_nom) + delta;
         }
         delta_values[step as usize] = (t, delta);
