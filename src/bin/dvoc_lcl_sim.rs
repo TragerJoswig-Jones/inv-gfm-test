@@ -36,8 +36,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let z_base = 3. * v_nom * v_nom / s_rated;
 
     let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c);
-    inv.x[(1)] = 0.003;  // Initialize inverter angle to be off from the grid to test presync
-    inv.x[(0)] = 1.1;  // Initialize inverter voltage to be off from v_nom to test presync
+    inv.x[(1)] = 0.;//0.003;  // Initialize inverter angle to be off from the grid to test presync
+    inv.x[(0)] = 1.;//1.1;  // Initialize inverter voltage to be off from v_nom to test presync
     let inv_ab = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)]);  // Grab alpha-beta inv voltage for initializing the LCL filter
     let mut gfm = build_gfm(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
 
