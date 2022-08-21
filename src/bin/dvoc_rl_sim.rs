@@ -21,7 +21,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let f_nom: f32 = 60.;
     let w_nom: f32 = f_nom * 2.*PI;
     let s_rated: f32 = 1000.;
-    let dt: f32 = 1.0e-4_f32;
+    let fs: f32 = 10e3_f32; // Hz
+    let dt: f32 = 1. / fs;  // s
     let xi: f32 = 15.;
     let c: f32 = 0.2679;
     let gamma: f32 = 1.; 

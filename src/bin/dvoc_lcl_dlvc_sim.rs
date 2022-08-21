@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let f_nom: f32 = 60.;
     let w_nom: f32 = f_nom * 2.*PI;
     let s_rated: f32 = 1000.;
-    let fs: f32 = 100e3_f32; // Hz
+    let fs: f32 = 10e3_f32; // Hz
     let dt: f32 = 1. / fs;  // s
     let xi: f32 = 15.;
     let c: f32 = 0.2679;
@@ -39,8 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //let rv = 0;  // virtual impedance
     //let zf = libm::sqrtf(rf*rf+(lf*w_nom)*(lf*w_nom));  // filter nominal inductance
 
-    let w_cur = 2.*PI*2000.;  // TODO: Determine why these frequencies needed to be cranked up this high for tracking. Guessing that per-unitization is the underlying factor
-    let w_vol = 2.*PI*500.;   // Originally was using 2.*PI*5000 and 2.*PI*800, but found 1e6 and 3e5 work well (Seperation is a bit low though <10x). Possibly multiply by w_nom, so remove 1/w_nom below?
+    let w_cur = 2.*PI*2750.;  // TODO: Determine why these frequencies needed to be cranked up this high for tracking. Guessing that per-unitization is the underlying factor
+    let w_vol = 2.*PI*800.;   // Originally was using 2.*PI*5000 and 2.*PI*800, but found 1e6 and 3e5 work well (Seperation is a bit low though <10x). Possibly multiply by w_nom, so remove 1/w_nom below?
     
     let kp_v = 1.*w_vol*cf * (z_base);
     let ki_v = 1.*kp_v*w_vol*w_vol/w_cur;
@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     RUNNING DYNAMICAL SIMULATION
     */
     // Simulation settings
-    let t_end = 5.0;  // Simulate time in seconds
+    let t_end = 1.5;  // Simulate time in seconds
     let t_step = t_end; //t_end / 2.; // Active power reference step time
     let t_switch = 0.2;  // Grid-side switch time
     let n_steps: u32 = (t_end / dt).ceil() as u32;

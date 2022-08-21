@@ -8,46 +8,58 @@ use unifi_gfm::refs::*;
 use unifi_gfm::sims::*;
 use unifi_gfm::constants::*;
 
-const VOLTAGE_FILE_NAME: &'static str = "images/droop_sim_voltage.png";
-const THETA_FILE_NAME: &'static str = "images/droop_sim_thetas.png";
-const POWER_OUT_FILE_NAME: &'static str = "images/droop_sim_powers.png";
-const CURRENT_OUT_FILE_NAME: &'static str = "images/droop_sim_currents.png";
-const DELTA_OUT_FILE_NAME: &'static str = "images/droop_sim_deltas.png";
-
+const VOLTAGE_FILE_NAME: &'static str = "images/droop_rl_sim_voltage.png";
+const THETA_FILE_NAME: &'static str = "images/droop_rl_sim_thetas.png";
+const POWER_OUT_FILE_NAME: &'static str = "images/droop_rl_sim_powers.png";
+const CURRENT_OUT_FILE_NAME: &'static str = "images/droop_rl_sim_currents.png";
+const DELTA_OUT_FILE_NAME: &'static str = "images/droop_rl_sim_deltas.png";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env::set_var("RUST_BACKTRACE", "1");  // Enable backtrace for identifying overflow errors 
-    /* 
+    /*
     DEFINE SYSTEM PARAMETERS & CONSTRUCT OBJECTS
     */
     let v_nom: f32 = 80.;
     let f_nom: f32 = 60.;
     let w_nom: f32 = f_nom * 2.*PI;
     let s_rated: f32 = 1000.;
-    let z_base = 3. * v_nom * v_nom / s_rated;
-    let dt: f32 = 1.0e-4_f32;
-    let mp: f32 = 0.0026; // / w_nom;  // Does this coefficient need to be per-unitized?
-    let mq: f32 = 0.005; // / v_nom;   // Does this coefficient need to be per-unitized?
-    let w_c: f32 = 30.*2.*PI;  // Does this filter frequency need to be per-unitized?
-    let mut inv = build_droop_controller(v_nom, w_nom, mp, mq, w_c);
-    inv.x[(1)] = dt * 0.53;  // Initialize inverter angle leading the grid angle by ~half a cycle to start closer to the digital equalibria
-    inv.x[(0)] = 0.999965;  // Initialize inverter voltage slightly lower than nominal to start closer to the digital equalibria
+    let fs: f32 = 10e3_f32; // Hz
+    let dt: f32 = 1. / fs;  // s
+    let mp: f32 = 0.0026; // / w_nom;  // TODO: Does this coefficient need to be per-unitized? Current values seems to make the response sluggish
+    let mq: f32 = 0.005; // / v_nom;   // TODO: Does this coefficient need to be per-unitized?
+    let w_c: f32 = 30.*2.*PI;  // TODO: Does this filter frequency need to be per-unitized?
+    let gamma: f32 = 35.;  // TODO: Determine what value should be used for gamma. Too high causes instability, but too low causes sluggish presync
 
-    let rf = 0.8;
-    let lf = 1.5e-3;
-    let mut line: RlBranch<f32> = build_rl_branch(f_nom, rf / z_base, lf / z_base);
+    let rf = 0.8;  // filter-side resistance
+    let lf = 1.5e-3;  // filter-side inductance
+
+    let z_base = 3. * v_nom * v_nom / s_rated;
+
+    let mut inv = build_droop_controller(v_nom, w_nom, mp, mq, w_c);
+    inv.x[(1)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
+    inv.x[(0)] = 1.1;  // Initialize inverter voltage to be off from v_nom to test presync
+    let mut gfm = build_gfm(&mut inv, gamma);  // Place the droop controller within a GFM interface object
+
+    let mut line: RlBranch<f32> = build_rl_branch(w_nom, rf / z_base, lf / z_base);
     let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
 
     /*
     RUNNING DYNAMICAL SIMULATION
     */
+    // Simulation settings
     let t_end = 0.5;  // Simulate time in seconds
+    let t_step = t_end / 2.; // Active power reference step time
+    let t_switch = t_end / 5.;  // Grid-side switch time
     let n_steps: u32 = (t_end / dt).ceil() as u32;
     let cont_n_steps = 20;  // Number of steps taken for 'continuous' dynamics for each digital step
     let cont_dt = dt / (cont_n_steps as f32);
     let steps: Vec<u32> = (0..n_steps+1).collect();
+    // Initialize simulation variables
     let mut t: f32;
-    let mut p: f32 = 0.; let mut q: f32 = 0.;
-    let mut delta: f32; let mut i_alpha_sample: f32; let mut i_beta_sample: f32;
+    let mut p: f32 = 0.; let mut q: f32 = 0.; let mut delta: f32; 
+    let mut i_alpha_sample: f32; let mut i_beta_sample: f32;
+    let mut v_grid_sample: f32; let mut theta_grid_sample: f32;
+    let mut v_grid: f32; let mut theta_grid: f32; let mut v_inv: [f32; 2];
+    let mut v_to_alpha_beta: AlphaBeta<f32>;
+    // Simulation data vectors
     let mut v_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut theta_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut vg_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
@@ -57,23 +69,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut q_values: Vec<(f32, f32)> = vec![(0., 0.); ((n_steps+1)*cont_n_steps) as usize];
     let mut ia_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut ib_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
-    for step in steps {  // TODO: Debug this to see where the overflow occurs...
+    for step in steps {
         t = step as f32 * dt;
-        if t > (t_end / 2.) {
-            inv.set_p_ref(1.0);
+        if t > t_step {
+            gfm.set_p_ref(1.0);
         }
 
         // Collect voltage values
-        v_values[step as usize] = (t, inv.x[(0)]);
-        theta_values[step as usize] = (t, inv.x[(1)]);
+        v_inv = gfm.get_pu_voltage();
+        v_values[step as usize] = (t, v_inv[0]);
+        theta_values[step as usize] = (t, v_inv[1]);
         vg_values[step as usize] = (t, bus.x[(0)]);
         thetag_values[step as usize] = (t, bus.x[(1)]);
         ia_values[step as usize] = (t, line.x[(0)]);
         ib_values[step as usize] = (t, line.x[(1)]);
-        delta = inv.x[(1)] - bus.x[(1)];
+        delta = v_inv[1] - bus.x[(1)];
         if delta > (1. / f_nom) {
             delta = -(1. / f_nom) + delta;
-        } else if delta < -(1. / f_nom - 5.0e-4) {
+        } else if delta < -(1. / f_nom - 1.0e-4) {
             delta = (1. / f_nom) + delta;
         }
         delta_values[step as usize] = (t, delta);
@@ -81,22 +94,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Sample the current
         i_alpha_sample = line.x[(0)];
         i_beta_sample = line.x[(1)];
+        // Sample the grid
+        v_grid_sample = bus.x[(0)];
+        theta_grid_sample = bus.x[(1)] * bus.w_nom;
+        let v_grid_sample_alpha_beta = AlphaBeta::from_polar(v_grid_sample, theta_grid_sample);
+        // Get alpha-beta gfm voltage
+        let v_inv_alpha_beta = AlphaBeta::from_polar(v_inv[0], v_inv[1] * gfm.ctrl.get_w_nom());
 
         // Step the system
         for n in 0..cont_n_steps {
             // Calculate power
-            let v = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)] * inv.w_nom);
             let i = AlphaBeta::from_ab_(line.x[(0)], line.x[(1)]);
-            (p, q) = calc_ab_power(&v, &i);
+            (p, q) = calc_ab_power(&v_inv_alpha_beta, &i);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p);
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q);
+            
+            // Step the system
+            if t > t_switch {  // Get inductor grid-side voltage based on switch state
+                gfm.disable_presync();
+                v_grid = bus.x[(0)];  // TODO: rename this for clarity
+                theta_grid = bus.x[(1)] * bus.w_nom;
+                v_to_alpha_beta = AlphaBeta::from_polar(v_grid, theta_grid);
+            } else {
+                v_to_alpha_beta = AlphaBeta::from_polar(v_inv[0], v_inv[1] * gfm.ctrl.get_w_nom());
+            }
+            line.step(cont_dt, [v_inv_alpha_beta.alpha, v_inv_alpha_beta.beta, 
+                                   v_to_alpha_beta.alpha, v_to_alpha_beta.beta]);
             bus.step_(cont_dt);
-            line.step(cont_dt, [inv.x[(0)], inv.x[(1)] * inv.w_nom, 
-                                  bus.x[(0)], bus.x[(1)] * bus.w_nom]);
         }
 
         // Step the controller after a z^-1 delay
-        inv.step(dt, [i_alpha_sample, i_beta_sample]);
+        gfm.gfm_step(dt, [i_alpha_sample, i_beta_sample], [v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta]);
     }
     println!("v: {}, theta: {}", inv.x[(0)], inv.x[(1)]);
     println!("ia: {}, ib: {}", line.x[(0)], line.x[(1)]);
