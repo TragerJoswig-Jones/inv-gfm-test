@@ -26,6 +26,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c: f32 = 0.2679;
     let gamma: f32 = 1.; 
 
+    let v_base = v_nom;
+    let i_base = 3. * v_nom / s_rated;
+    let z_base = 3. * v_nom * v_nom / s_rated;
+
     let rf = 0.4;  // filter-side resistance
     let lf = 1.5e-3;  // filter-side inductance
     let cf = 10e-6;  // filter capacitance
@@ -38,18 +42,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let w_cur = 2.*PI*5000.;
     let w_vol = 2.*PI*800.;
     
-    let kp_v = 2.*w_vol*cf;
-    let ki_v = 2.*kp_v*w_vol*w_vol/w_cur;
-    let kp_i = lf*w_cur;
-    let ki_i = rf*w_cur;
-
-    let z_base = 3. * v_nom * v_nom / s_rated;
+    let kp_v = 2.*w_vol*cf / i_base;
+    let ki_v = 2.*kp_v*w_vol*w_vol/w_cur / i_base;
+    let kp_i = lf*w_cur / v_base;
+    let ki_i = rf*w_cur / v_base;
 
     let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c);
     inv.x[(1)] = 0.003;  // Initialize inverter angle to be off from the grid to test presync
     inv.x[(0)] = 1.1;  // Initialize inverter voltage to be off from v_nom to test presync
     let mut gfm = build_gfm(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
-    let mut voltage_loop = build_double_loop_voltage_controller(v_nom, kp_v, ki_v, kp_i, ki_i, lf, cf);
+    let mut voltage_loop = build_double_loop_voltage_controller(v_nom, kp_v, ki_v, kp_i, ki_i, lf, cf, i_base, -i_base);
 
     let mut line: LclFilter<f32> = build_lcl_filter(w_nom, v_nom, rf / z_base, lf / z_base, rc / z_base, cf / z_base, rg / z_base, lg / z_base);
     let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);

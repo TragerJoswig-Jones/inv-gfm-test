@@ -26,33 +26,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c: f32 = 0.2679;
     let gamma: f32 = 1.; 
 
+    let i_base = 3. * v_nom / s_rated;
+    let z_base = 3. * v_nom * v_nom / s_rated;
+
     let rf = 0.4;  // filter-side resistance
     let lf = 1.5e-3;  // filter-side inductance
     let cf = 10e-6;  // filter capacitance
     let rc = 0.05;  // filter capacitor parasitic resistance
     let rg = 0.4;  // grid-side resistance
     let lg = 1.5e-3;  // grid-side inductance
-    let rv = 0;  // virtual impedance
-    let zf = libm::sqrtf(rf*rf+(lf*w_nom)*(lf*w_nom));  // filter nominal inductance
+    //let rv = 0;  // virtual impedance
+    //let zf = libm::sqrtf(rf*rf+(lf*w_nom)*(lf*w_nom));  // filter nominal inductance
 
-    let w_cur = 2.*PI*5000.;
-    let w_vol = 2.*PI*800.;
+    let w_cur = 2.*PI*2750.;  // TODO: Determine why these frequencies needed to be cranked up this high for tracking. Guessing that per-unitization is the underlying factor
+    let w_vol = 2.*PI*800.;   // Originally was using 2.*PI*5000 and 2.*PI*800, but found 1e6 and 3e5 work well (Seperation is a bit low though <10x). Possibly multiply by w_nom, so remove 1/w_nom below?
     
-    let kp_v = 2.*w_vol*cf;
-    let ki_v = 2.*kp_v*w_vol*w_vol/w_cur;
-    let kp_i = lf*w_cur;
-    let ki_i = rf*w_cur;
-
-    let z_base = 3. * v_nom * v_nom / s_rated;
+    let kp_v = 1.*w_vol*cf * (z_base);
+    let ki_v = 1.*kp_v*w_vol*w_vol/w_cur;
+    let kp_i = 1.*lf*w_cur * (1. / z_base);
+    let ki_i = 1.*rf*w_cur * (1. / z_base);  // TODO: Is this per-unitization of scalars here correct? Most concerned about w_nom scaling
 
     let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c);
-    inv.x[(1)] = 0.003;  // Initialize inverter angle to be off from the grid to test presync
+    let theta0 = 0.003;
+    inv.x[(1)] = theta0;  // Initialize inverter angle to be off from the grid to test presync
     inv.x[(0)] = 1.1;  // Initialize inverter voltage to be off from v_nom to test presync
-    let inv_ab = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)]);  // Grab alpha-beta inv voltage for initializing the LCL filter
+    let inv_ab = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)] * w_nom);  // Grab alpha-beta inv voltage for initializing the LCL filter
     let mut gfm = build_gfm(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
-    let mut voltage_loop = build_double_loop_voltage_controller(v_nom, kp_v, ki_v, kp_i, ki_i, lf, cf);
+    let mut voltage_loop = build_double_loop_voltage_controller(v_nom, kp_v, ki_v, kp_i, ki_i, lf / z_base, cf * z_base, i_base, -i_base);
 
-    let mut line: LclFilter<f32> = build_lcl_filter(w_nom, v_nom, rf / z_base, lf / z_base, rc / z_base, cf / z_base, rg / z_base, lg / z_base);
+    let mut line: LclFilter<f32> = build_lcl_filter(w_nom, v_nom, rf / z_base, lf / z_base, rc / z_base, cf * z_base, rg / z_base, lg / z_base);
     line.x[(2)] = inv_ab.alpha;  // Initialize capacitor voltage to align with the inverter voltage
     line.x[(3)] = inv_ab.beta;
     let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
@@ -61,9 +63,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     RUNNING DYNAMICAL SIMULATION
     */
     // Simulation settings
-    let t_end = 0.5;  // Simulate time in seconds
-    let t_step = t_end / 2.; // Active power reference step time
-    let t_switch = 0.1;  // Grid-side switch time
+    let t_end = 1.0;  // Simulate time in seconds
+    let t_step = t_end; //t_end / 2.; // Active power reference step time
+    let t_switch = 0.2;  // Grid-side switch time
     let n_steps: u32 = (t_end / dt).ceil() as u32;
     let cont_n_steps = 20;  // Number of steps taken for 'continuous' dynamics for each digital step
     let cont_dt = dt / (cont_n_steps as f32);
@@ -74,17 +76,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut i_alpha_sample: f32; let mut i_beta_sample: f32;
     let mut v_grid_sample: f32; let mut theta_grid_sample: f32;
     let mut v_grid: f32; let mut theta_grid: f32; 
-    let mut v_inv: [f32; 2]; let mut v_cap: [f32; 2]; let mut v_gfm: [f32; 2];
+    let mut v_inv: [f32; 2]; let mut v_cap: [f32; 2] = [inv_ab.alpha, inv_ab.beta]; let mut v_gfm: [f32; 2];
     let mut dv_dt_gfm:  nalgebra::SVector<f32, 2> = nalgebra::zero();
-    let mut v_inv_alpha_beta = AlphaBeta{alpha:0., beta:0., gamma:0.}; 
-    let mut v_grid_sample_alpha_beta = AlphaBeta{alpha:0., beta:0., gamma:0.}; 
-    let mut v_to_alpha_beta = AlphaBeta{alpha:0., beta:0., gamma:0.};
+    let mut v_inv_alpha_beta: AlphaBeta<f32>; let mut v_cap_alpha_beta: AlphaBeta<f32>; 
+    let mut v_grid_sample_alpha_beta: AlphaBeta<f32>; let mut v_to_alpha_beta: AlphaBeta<f32>;
     let mut i_fr: [f32; 2]; let mut i_to: [f32; 2]; let mut v_inv_dq: [f32; 2]; let mut v_inv_polar: Polar<f32>; 
-    let mut vc_dq = DQZ{d:0., q:0., z:0.}; let mut if_dq = DQZ{d:0., q:0., z:0.}; 
-    let mut ig_dq: DQZ<f32> = DQZ{d:0., q:0., z:0.}; let mut sin_cos = SinCos::from_theta(0.);
+    let mut sin_cos = SinCos::from_theta(theta0 * w_nom); let mut vc_dq = inv_ab.to_dqz(&sin_cos); 
+    let mut if_dq = DQZ{d:0., q:0., z:0.}; let mut ig_dq: DQZ<f32> = DQZ{d:0., q:0., z:0.};
     // Simulation data vectors
     let mut v_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut theta_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
+    let mut vc_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
+    let mut thetac_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut vg_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut thetag_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut delta_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
@@ -99,40 +102,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         // Get inverter output voltage from voltage-loop and convert to polar
         v_gfm = gfm.get_pu_voltage();
-        v_inv_dq = voltage_loop.output([v_gfm[0], dv_dt_gfm[(1)], vc_dq.d, vc_dq.q, if_dq.d, if_dq.q, ig_dq.d, ig_dq.q]);
-        v_inv_polar = Polar::from_dqz(v_inv_dq[0], v_inv_dq[1], 0., sin_cos);
-        v_inv = [v_inv_polar.r, v_inv_polar.theta];
+        v_inv_dq = voltage_loop.output([v_gfm[0] * SQRT_2, dv_dt_gfm[(1)] * w_nom, vc_dq.d, vc_dq.q, if_dq.d, if_dq.q, ig_dq.d, ig_dq.q]);
+        v_inv_polar = Polar::from_dqz(v_inv_dq[0], v_inv_dq[1], 0., &sin_cos);
+        v_inv = [v_inv_polar.r, v_inv_polar.theta / w_nom];
         
         // Collect simulation values
-        v_values[step as usize] = (t, v_inv[0]);
-        theta_values[step as usize] = (t, v_inv[1]);
+        let vc = Polar::from_ab(v_cap[0], v_cap[1], 0.);
+        let mut vc_theta = vc.theta;
+        if vc_theta > (2.*PI) {
+            vc_theta = -2.*PI + vc_theta;
+        } else if vc_theta < 0. {
+            vc_theta = 2.*PI + vc_theta;
+        }
+        v_values[step as usize] = (t, v_gfm[0]);
+        theta_values[step as usize] = (t, v_gfm[1]);
+        vc_values[step as usize] = (t, vc.r);
+        thetac_values[step as usize] = (t, vc_theta / w_nom);
         vg_values[step as usize] = (t, bus.x[(0)]);
         thetag_values[step as usize] = (t, bus.x[(1)]);
         ia_values[step as usize] = (t, line.x[(0)]);
         ib_values[step as usize] = (t, line.x[(1)]);
-        delta = v_inv[1] - bus.x[(1)];
-        if delta > (1. / f_nom) {
+        delta = vc_theta / w_nom - bus.x[(1)];
+        if delta > (1. / f_nom - 1.0e-4) {
             delta = -(1. / f_nom) + delta;
         } else if delta < -(1. / f_nom - 1.0e-4) {
             delta = (1. / f_nom) + delta;
         }
         delta_values[step as usize] = (t, delta);
 
-        // Sample the current
-        i_alpha_sample = line.x[(0)];
-        i_beta_sample = line.x[(1)];
+        // Sample the current on the grid side of the LCL filter
+        i_alpha_sample = line.x[(4)];
+        i_beta_sample = line.x[(5)];
         // Sample the grid
         v_grid_sample = bus.x[(0)];
         theta_grid_sample = bus.x[(1)] * bus.w_nom;
         v_grid_sample_alpha_beta = AlphaBeta::from_polar(v_grid_sample, theta_grid_sample);
-        // Get alpha-beta gfm voltage
+        // Get alpha-beta inverter voltage
         v_inv_alpha_beta = AlphaBeta::from_polar(v_inv[0], v_inv[1] * gfm.ctrl.get_w_nom());
+        // Get alpha-beta LCL capacitor voltage
+        v_cap_alpha_beta = AlphaBeta::from_ab_(v_cap[0], v_cap[1]);
 
         // Step the system
         for n in 0..cont_n_steps {
-            // Calculate power
-            let i = AlphaBeta::from_ab_(line.x[(0)], line.x[(1)]);
-            (p, q) = calc_ab_power(&v_inv_alpha_beta, &i);
+            // Calculate power at the capacitor node 
+            let i = AlphaBeta::from_ab_(line.x[(0)], line.x[(1)]);  // TODO: Change this to the grid-side power once virtual impedance is implemented
+            (p, q) = calc_ab_power(&v_cap_alpha_beta, &i);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p);
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q);
             
@@ -156,11 +170,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         v_cap = line.get_voltage();
         i_fr = line.get_from_current();
         i_to = line.get_to_current();
-        sin_cos = SinCos::from_theta(v_gfm[(1)]);
+        sin_cos = SinCos::from_theta(v_gfm[(1)] * w_nom);
         vc_dq = DQZ::from_ab_(v_cap[0], v_cap[1], &sin_cos);
         if_dq = DQZ::from_ab_(i_fr[0], i_fr[1], &sin_cos);
         ig_dq = DQZ::from_ab_(i_to[0], i_to[1], &sin_cos);
-        voltage_loop.step(dt, [v_gfm[0], dv_dt_gfm[(1)], vc_dq.d, vc_dq.q, if_dq.d, if_dq.q, ig_dq.d, ig_dq.q]); // u=[E, w_inv, Vd_c, Vq_c, id_f, iq_f, id_g, iq_g]
+        // u=[E, w_inv, Vd_c, Vq_c, id_f, iq_f, id_g, iq_g]
+        voltage_loop.step(dt, [v_gfm[0] * SQRT_2, dv_dt_gfm[(1)] * w_nom, vc_dq.d, vc_dq.q, if_dq.d, if_dq.q, ig_dq.d, ig_dq.q]);  // TODO: Should w_gfm by in per-unit or rad/s?
     }
     println!("v: {}, theta: {}", inv.x[(0)], inv.x[(1)]);
     println!("ia: {}, ib: {}", line.x[(0)], line.x[(1)]);
@@ -175,6 +190,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let theta_values_ = theta_values.to_vec();
     let vg_values_ = vg_values.to_vec();
     let thetag_values_ = thetag_values.to_vec();
+    let vc_values_ = vc_values.to_vec();
+    let thetac_values_ = thetac_values.to_vec();
     let delta_values_ = delta_values.to_vec();
     let p_values_ = p_values.to_vec();
     let q_values_ = q_values.to_vec();
@@ -184,7 +201,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     /* Plot voltage magnitude data */
     let (_,mut vs): (Vec<f32>, Vec<f32>) = v_values.into_iter().unzip();
     let (_,mut vgs): (Vec<_>, Vec<_>) = vg_values.into_iter().unzip();
+    let (_,mut vcs): (Vec<_>, Vec<_>) = vc_values.into_iter().unzip();
     vs.append(&mut vgs);
+    vs.append(&mut vcs);
     let min_v: f32 = vs.iter().fold(f32::INFINITY, |a, &b| a.min(b));
     let max_v: f32 = vs.iter().fold(0.0f32, |a, &b| a.max(b));
     let root = BitMapBackend::new(VOLTAGE_FILE_NAME, (640, 480)).into_drawing_area();
@@ -203,7 +222,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             v_values_,
             &RED,
         ))?
-        .label("Inv Voltage")
+        .label("GFM Voltage")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
     
     chart
@@ -213,6 +232,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))?
         .label("Bus Voltage")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &GREEN));
+    chart
+        .draw_series(LineSeries::new(
+            vc_values_,
+            &BLUE,
+        ))?
+        .label("Cap Voltage")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
 
     chart
         .configure_series_labels()
@@ -225,7 +251,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     /* Plot voltage angle data */
     let (_,mut ths): (Vec<f32>, Vec<f32>) = theta_values.into_iter().unzip();
     let (_,mut thgs): (Vec<_>, Vec<_>) = thetag_values.into_iter().unzip();
+    let (_,mut thcs): (Vec<_>, Vec<_>) = thetac_values.into_iter().unzip();
     ths.append(&mut thgs);
+    ths.append(&mut thcs);
     let min_th: f32 = ths.iter().fold(f32::INFINITY, |a, &b| a.min(b));
     let max_th: f32 = ths.iter().fold(0.0f32, |a, &b| a.max(b));
     let root = BitMapBackend::new(THETA_FILE_NAME, (640, 480)).into_drawing_area();
@@ -244,7 +272,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             theta_values_,
             &BLUE,
         ))?
-        .label("Inv Theta")
+        .label("GFM Theta")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
 
     chart
@@ -254,6 +282,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))?
         .label("Bus Theta")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLACK));
+
+    chart
+        .draw_series(LineSeries::new(
+            thetac_values_,
+            &RED,
+        ))?
+        .label("Cap Theta")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
 
     chart
         .configure_series_labels()
@@ -357,7 +393,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let root = BitMapBackend::new(DELTA_OUT_FILE_NAME, (640, 480)).into_drawing_area();
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
-        .caption("Voltage Angle Difference", ("sans-serif", 50).into_font())
+        .caption("Angle Difference, Vcap-Vgrid", ("sans-serif", 50).into_font())
         .margin(5 as u32)
         .x_label_area_size(30 as u32)
         .y_label_area_size(30 as u32)
