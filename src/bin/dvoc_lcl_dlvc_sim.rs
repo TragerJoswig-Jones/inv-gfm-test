@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut gfm = build_gfm(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
     let mut voltage_loop = build_double_loop_voltage_controller(v_nom, kp_v, ki_v, kp_i, ki_i, lf / z_base, cf * z_base, i_base, -i_base);
 
-    let mut line: LclFilter<f32> = build_lcl_filter(w_nom, v_nom, rf / z_base, lf / z_base, rc / z_base, cf * z_base, rg / z_base, lg / z_base);
+    let mut line: LclFilter<f32> = build_lcl_filter(w_nom, i_base, v_nom, rf / z_base, lf / z_base, rc / z_base, cf * z_base, rg / z_base, lg / z_base);
     line.x[(2)] = inv_ab.alpha;  // Initialize capacitor voltage to align with the inverter voltage
     line.x[(3)] = inv_ab.beta;
     let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
@@ -169,7 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Step the controller after a z^-1 delay
         dv_dt_gfm = gfm.gfm_step(dt, [i_alpha_sample, i_beta_sample], [v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta]);
         v_cap = line.get_voltage();
-        i_fr = line.get_from_current();
+        i_fr = line.get_fr_current();
         i_to = line.get_to_current();
         sin_cos = SinCos::from_theta(v_gfm[(1)] * w_nom);
         vc_dq = DQZ::from_ab_(v_cap[0], v_cap[1], &sin_cos);

@@ -33,6 +33,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rg = 0.4;  // grid-side resistance
     let lg = 1.5e-3;  // grid-side inductance
 
+    let i_base = 3. * v_nom / s_rated;
     let z_base = 3. * v_nom * v_nom / s_rated;
 
     let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c);
@@ -41,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let inv_ab = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)]);  // Grab alpha-beta inv voltage for initializing the LCL filter
     let mut gfm = build_gfm(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
 
-    let mut line: LclFilter<f32> = build_lcl_filter(w_nom, v_nom, rf / z_base, lf / z_base, rc / z_base, cf * z_base, rg / z_base, lg / z_base);
+    let mut line: LclFilter<f32> = build_lcl_filter(w_nom, i_base, v_nom, rf / z_base, lf / z_base, rc / z_base, cf * z_base, rg / z_base, lg / z_base);
     line.x[(2)] = inv_ab.alpha;  // Initialize capacitor voltage to align with the inverter voltage
     line.x[(3)] = inv_ab.beta;
     let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);

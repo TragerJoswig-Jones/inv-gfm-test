@@ -30,6 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rf = 0.8;  // filter-side resistance
     let lf = 1.5e-3;  // filter-side inductance
 
+    let i_base = 3. * v_nom / s_rated;
     let z_base = 3. * v_nom * v_nom / s_rated;
 
     let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c);
@@ -37,8 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     inv.x[(0)] = 1.1;  // Initialize inverter voltage to be off from v_nom to test presync
     let mut gfm = build_gfm(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
 
-    let mut line: RlBranch<f32> = build_rl_branch(w_nom, rf / z_base, lf / z_base);
+    let mut line: RlBranch<f32> = build_rl_branch(i_base, w_nom, rf / z_base, lf / z_base);
     let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
+    let mut line_to_bus: LineToBus<f32, 4, 2> = build_line_to_bus(&mut line, bus);  // TODO: Determine if these references need to be mutable and try to make it so that LTB can build its own components
 
     /*
     RUNNING DYNAMICAL SIMULATION
@@ -78,11 +80,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         v_inv = gfm.get_pu_voltage();
         v_values[step as usize] = (t, v_inv[0]);
         theta_values[step as usize] = (t, v_inv[1]);
-        vg_values[step as usize] = (t, bus.x[(0)]);
-        thetag_values[step as usize] = (t, bus.x[(1)]);
-        ia_values[step as usize] = (t, line.x[(0)]);
-        ib_values[step as usize] = (t, line.x[(1)]);
-        delta = v_inv[1] - bus.x[(1)];
+        vg_values[step as usize] = (t, line_to_bus.x[(0)]);
+        thetag_values[step as usize] = (t, line_to_bus.x[(1)]);
+        ia_values[step as usize] = (t, line_to_bus.x[(2)]);
+        ib_values[step as usize] = (t, line_to_bus.x[(3)]);
+        delta = v_inv[1] - line_to_bus.x[(1)];
         if delta > (1. / f_nom) {
             delta = -(1. / f_nom) + delta;
         } else if delta < -(1. / f_nom - 1.0e-4) {
@@ -91,11 +93,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         delta_values[step as usize] = (t, delta);
 
         // Sample the current
-        i_alpha_sample = line.x[(0)];
-        i_beta_sample = line.x[(1)];
+        i_alpha_sample = line_to_bus.x[(2)];
+        i_beta_sample = line_to_bus.x[(3)];
         // Sample the grid
-        v_grid_sample = bus.x[(0)];
-        theta_grid_sample = bus.x[(1)] * bus.w_nom;
+        v_grid_sample = line_to_bus.x[(0)];
+        theta_grid_sample = line_to_bus.x[(1)] * line_to_bus.bus.w_nom;
         let v_grid_sample_alpha_beta = AlphaBeta::from_polar(v_grid_sample, theta_grid_sample);
         // Get alpha-beta gfm voltage
         let v_inv_alpha_beta = AlphaBeta::from_polar(v_inv[0], v_inv[1] * gfm.ctrl.get_w_nom());
@@ -103,31 +105,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Step the system
         for n in 0..cont_n_steps {
             // Calculate power
-            let i = AlphaBeta::from_ab_(line.x[(0)], line.x[(1)]);
+            let i = AlphaBeta::from_ab_(line_to_bus.x[(2)], line_to_bus.x[(3)]);
             (p, q) = calc_ab_power(&v_inv_alpha_beta, &i);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p);
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q);
             
             // Step the system
-            if t > t_switch {  // Get inductor grid-side voltage based on switch state
+            if (t > t_switch) & !line_to_bus.switch_is_closed()  {  // Get inductor grid-side voltage based on switch state
                 gfm.disable_presync();
-                v_grid = bus.x[(0)];  // TODO: rename this for clarity
-                theta_grid = bus.x[(1)] * bus.w_nom;
-                v_to_alpha_beta = AlphaBeta::from_polar(v_grid, theta_grid);
-            } else {
-                v_to_alpha_beta = AlphaBeta::from_polar(v_inv[0], v_inv[1] * gfm.ctrl.get_w_nom());
+                line_to_bus.close_switch();
             }
-            line.step(cont_dt, [v_inv_alpha_beta.alpha, v_inv_alpha_beta.beta, 
-                                   v_to_alpha_beta.alpha, v_to_alpha_beta.beta]);
-            bus.step_(cont_dt);
+            line_to_bus.step(cont_dt, [v_inv_alpha_beta.alpha, v_inv_alpha_beta.beta]);
         }
 
         // Step the controller after a z^-1 delay
         gfm.gfm_step(dt, [i_alpha_sample, i_beta_sample], [v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta]);
     }
     println!("v: {}, theta: {}", inv.x[(0)], inv.x[(1)]);
-    println!("ia: {}, ib: {}", line.x[(0)], line.x[(1)]);
-    println!("vg: {}, thetag: {}", bus.x[(0)], bus.x[(1)]);
+    println!("ia: {}, ib: {}", line_to_bus.x[(2)], line_to_bus.x[(3)]);
+    println!("vg: {}, thetag: {}", line_to_bus.x[(0)], line_to_bus.x[(1)]);
     println!("p: {}, q: {}", p, q);
 
     /*

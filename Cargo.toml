@@ -10,3 +10,12 @@ libm = "0.2.2"  # Option for f32 sin_cos calculations
 nalgebra = "0.31.1"
 plotters = "0.3.1"
 unifi-gfm = { path = "../unifi-gfm" }
+
+# cargo build/run
+[profile.dev]
+codegen-units = 1
+debug = 2
+debug-assertions = true # <-
+incremental = false
+opt-level = 0 # <-
+overflow-checks = true # <-

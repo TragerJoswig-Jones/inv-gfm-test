@@ -32,13 +32,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rf = 0.8;  // filter-side resistance
     let lf = 1.5e-3;  // filter-side inductance
 
+    let i_base = 3. * v_nom / s_rated;
     let z_base = 3. * v_nom * v_nom / s_rated;
 
     let mut inv = build_droop_controller(v_nom, w_nom, mp, mq, w_c);
     inv.x[(0)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
     let mut gfm = build_gfm(&mut inv, gamma);  // Place the droop controller within a GFM interface object
 
-    let mut line: RlBranch<f32> = build_rl_branch(w_nom, rf / z_base, lf / z_base);
+    let mut line: RlBranch<f32> = build_rl_branch(i_base, w_nom, rf / z_base, lf / z_base);
     let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
 
     /*

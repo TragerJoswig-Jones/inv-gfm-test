@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut gfm = build_gfm(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
     let mut voltage_loop = build_double_loop_voltage_controller(v_nom, kp_v, ki_v, kp_i, ki_i, lf, cf, i_base, -i_base);
 
-    let mut line: LclFilter<f32> = build_lcl_filter(w_nom, v_nom, rf / z_base, lf / z_base, rc / z_base, cf / z_base, rg / z_base, lg / z_base);
+    let mut line: LclFilter<f32> = build_lcl_filter(w_nom, i_base, v_nom, rf / z_base, lf / z_base, rc / z_base, cf / z_base, rg / z_base, lg / z_base);
     let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
 
     /*
