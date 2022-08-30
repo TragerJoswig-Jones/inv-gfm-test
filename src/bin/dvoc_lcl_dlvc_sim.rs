@@ -2,11 +2,14 @@
 
 use std::*;
 use plotters::prelude::*;
-use unifi_gfm::calc::*;
+use unifi_gfm::calculations::*;
+use unifi_gfm::dynamics::*;
 use unifi_gfm::gfm::*;
-use unifi_gfm::refs::*;
-use unifi_gfm::sims::*;
+use unifi_gfm::inverter::*;
+use unifi_gfm::reference_frames::*;
+use unifi_gfm::simulations::*;
 use unifi_gfm::constants::*;
+
 
 const VOLTAGE_FILE_NAME: &'static str = "images/dvoc_lcl_dlcv_sim_voltage.png";
 const THETA_FILE_NAME: &'static str = "images/dvoc_lcl_dlcv_sim_thetas.png";
@@ -17,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     /*
     DEFINE SYSTEM PARAMETERS & CONSTRUCT OBJECTS
     */
+    let n_phases = 3.;
     let v_nom: f32 = 80.;
     let f_nom: f32 = 60.;
     let w_nom: f32 = f_nom * 2.*PI;
@@ -47,26 +51,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kp_i = 1.*lf*w_cur * (1. / z_base);
     let ki_i = 1.*rf*w_cur * (1. / z_base);  // TODO: Is this per-unitization of scalars here correct? Most concerned about w_nom scaling
 
-    let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c);
+    let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c, n_phases);
     let theta0 = 0.0;  // 0.003 for initializing off from grid
     inv.x[(1)] = theta0;  // Initialize inverter angle to be off from the grid to test presync
     inv.x[(0)] = 1.0;  // Initialize inverter voltage to be off from v_nom to test presync
     let inv_ab = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)] * w_nom);  // Grab alpha-beta inv voltage for initializing the LCL filter
-    let mut gfm = build_gfm(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
+    let mut gfm = add_presynch(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
     let mut voltage_loop = build_double_loop_voltage_controller(v_nom, kp_v, ki_v, kp_i, ki_i, lf / z_base, cf * z_base, i_base, -i_base);
 
     let mut line: LclFilter<f32> = build_lcl_filter(w_nom, i_base, v_nom, rf / z_base, lf / z_base, rc / z_base, cf * z_base, rg / z_base, lg / z_base);
+    line.open_switch();  // Start with the line disconnected from the ac voltage source
     line.x[(2)] = inv_ab.alpha;  // Initialize capacitor voltage to align with the inverter voltage
     line.x[(3)] = inv_ab.beta;
-    let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
+    let bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
+    let mut line_to_bus: LineToBus<f32, 8, 6> = build_line_to_bus(&mut line, bus);  // TODO: Determine if these references need to be mutable and try to make it so that LTB can build its own components
+
 
     /*
     RUNNING DYNAMICAL SIMULATION
     */
     // Simulation settings
-    let t_end = 1.5;  // Simulate time in seconds
-    let t_step = t_end; //t_end / 2.; // Active power reference step time
-    let t_switch = 0.2;  // Grid-side switch time
+    let t_end = 0.5;  // Simulate time in seconds
+    let t_step = t_end / 2.; // Active power reference step time
+    let t_switch = t_end / 5.;  // Grid-side switch time
     let n_steps: u32 = (t_end / dt).ceil() as u32;
     let cont_n_steps = 20;  // Number of steps taken for 'continuous' dynamics for each digital step
     let cont_dt = dt / (cont_n_steps as f32);
@@ -101,13 +108,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if t > t_step {
             gfm.set_p_ref(1.0);
         }
+
         // Get inverter output voltage from voltage-loop and convert to polar
         v_gfm = gfm.get_pu_voltage();
         v_inv_dq = voltage_loop.output([v_gfm[0] * SQRT_2, dv_dt_gfm[(1)] * w_nom, vc_dq.d, vc_dq.q, if_dq.d, if_dq.q, ig_dq.d, ig_dq.q]);
         v_inv_polar = Polar::from_dqz(v_inv_dq[0], v_inv_dq[1], 0., &sin_cos);
         v_inv = [v_inv_polar.r, v_inv_polar.theta / w_nom];
-        
-        // Collect simulation values
+
+		// Collect simulation values
         let vc = Polar::from_ab(v_cap[0], v_cap[1], 0.);
         let mut vc_theta = vc.theta;
         if vc_theta > (2.*PI) {
@@ -119,58 +127,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         theta_values[step as usize] = (t, v_gfm[1]);
         vc_values[step as usize] = (t, vc.r);
         thetac_values[step as usize] = (t, vc_theta / w_nom);
-        vg_values[step as usize] = (t, bus.x[(0)]);
-        thetag_values[step as usize] = (t, bus.x[(1)]);
-        ia_values[step as usize] = (t, line.x[(0)]);
-        ib_values[step as usize] = (t, line.x[(1)]);
-        delta = vc_theta / w_nom - bus.x[(1)];
-        if delta > (1. / f_nom - 2.0e-4) {
+        vg_values[step as usize] = (t, line_to_bus.x[(0)]);
+        thetag_values[step as usize] = (t, line_to_bus.x[(1)]);
+        ia_values[step as usize] = (t, line_to_bus.x[(2)]);
+        ib_values[step as usize] = (t, line_to_bus.x[(3)]);
+        delta = vc_theta / w_nom - line_to_bus.x[(1)];
+        if delta > (1. / f_nom  - 5.0e-4) {
             delta = -(1. / f_nom) + delta;
-        } else if delta < -(1. / f_nom - 1.0e-4) {
+        } else if delta < -(1. / f_nom - 5.0e-4) {
             delta = (1. / f_nom) + delta;
         }
         delta_values[step as usize] = (t, delta);
 
-        // Sample the current on the grid side of the LCL filter
-        i_alpha_sample = line.x[(4)];
-        i_beta_sample = line.x[(5)];
+        // Sample the current
+        i_alpha_sample = line_to_bus.x[(2)];
+        i_beta_sample = line_to_bus.x[(3)];
         // Sample the grid
-        v_grid_sample = bus.x[(0)];
-        theta_grid_sample = bus.x[(1)] * bus.w_nom;
-        v_grid_sample_alpha_beta = AlphaBeta::from_polar(v_grid_sample, theta_grid_sample);
-        // Get alpha-beta inverter voltage
-        v_inv_alpha_beta = AlphaBeta::from_polar(v_inv[0], v_inv[1] * gfm.ctrl.get_w_nom());
-        // Get alpha-beta LCL capacitor voltage
-        v_cap_alpha_beta = AlphaBeta::from_ab_(v_cap[0], v_cap[1]);
+        v_grid_sample = line_to_bus.x[(0)];
+        theta_grid_sample = line_to_bus.x[(1)] * line_to_bus.bus.w_nom;
+        let v_grid_sample_alpha_beta = AlphaBeta::from_polar(v_grid_sample, theta_grid_sample);
+        // Get alpha-beta gfm voltage
+        let v_inv_alpha_beta = AlphaBeta::from_polar(v_inv[0], v_inv[1] * gfm.ctrl.get_w_nom());
 
         // Step the system
         for n in 0..cont_n_steps {
-            // Calculate power out of the capacitor node 
-            let i = AlphaBeta::from_ab_(line.x[(4)], line.x[(5)]);
-            (p, q) = calc_ab_power(&v_cap_alpha_beta, &i);  // TODO: Change this to the grid-side power once virtual impedance is implemented
+            // Calculate power
+            let i = AlphaBeta::from_ab_(line_to_bus.x[(2)], line_to_bus.x[(3)]);
+            (p, q) = calc_ab_power(&v_inv_alpha_beta, &i, n_phases);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p);
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q);
             
             // Step the system
-            if t > t_switch {  // Get inductor grid-side voltage based on switch state
+            if (t > t_switch) & !line_to_bus.switch_is_closed()  {  // Get inductor grid-side voltage based on switch state
                 gfm.disable_presync();
-                v_grid = bus.x[(0)];  // TODO: rename this for clarity
-                theta_grid = bus.x[(1)] * bus.w_nom;
-                v_to_alpha_beta = AlphaBeta::from_polar(v_grid, theta_grid);
-            } else {
-                v_cap = line.get_voltage();
-                v_to_alpha_beta = AlphaBeta::from_ab_(v_cap[0], v_cap[1]);
+                line_to_bus.close_switch();
             }
-            line.step(cont_dt, [v_inv_alpha_beta.alpha, v_inv_alpha_beta.beta, 
-                                   v_to_alpha_beta.alpha, v_to_alpha_beta.beta]);
-            bus.step_(cont_dt);
+            line_to_bus.step(cont_dt, [v_inv_alpha_beta.alpha, v_inv_alpha_beta.beta]);
         }
 
         // Step the controller after a z^-1 delay
-        dv_dt_gfm = gfm.gfm_step(dt, [i_alpha_sample, i_beta_sample], [v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta]);
-        v_cap = line.get_voltage();
-        i_fr = line.get_fr_current();
-        i_to = line.get_to_current();
+        dv_dt_gfm = gfm.inv_step(dt, [i_alpha_sample, i_beta_sample], [v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta]);
+        v_cap = [line_to_bus.x[(4)], line_to_bus.x[(5)]];  // TODO: Add methods to line to bus to get these values (How to address LCL filter having a voltage? )
+        i_fr = [line_to_bus.x[(2)], line_to_bus.x[(3)]];
+        i_to = [line_to_bus.x[(6)], line_to_bus.x[(7)]];
         sin_cos = SinCos::from_theta(v_gfm[(1)] * w_nom);
         vc_dq = DQZ::from_ab_(v_cap[0], v_cap[1], &sin_cos);
         if_dq = DQZ::from_ab_(i_fr[0], i_fr[1], &sin_cos);
@@ -179,8 +178,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         voltage_loop.step(dt, [v_gfm[0] * SQRT_2, dv_dt_gfm[(1)] * w_nom, vc_dq.d, vc_dq.q, if_dq.d, if_dq.q, ig_dq.d, ig_dq.q]);  // TODO: Should w_gfm by in per-unit or rad/s?
     }
     println!("v: {}, theta: {}", inv.x[(0)], inv.x[(1)]);
-    println!("ia: {}, ib: {}", line.x[(0)], line.x[(1)]);
-    println!("vg: {}, thetag: {}", bus.x[(0)], bus.x[(1)]);
+    println!("ia: {}, ib: {}", line_to_bus.x[(2)], line_to_bus.x[(3)]);
+    println!("vg: {}, thetag: {}", line_to_bus.x[(0)], line_to_bus.x[(1)]);
     println!("p: {}, q: {}", p, q);
 
     /*
