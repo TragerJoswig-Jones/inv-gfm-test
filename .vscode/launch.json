@@ -4,6 +4,7 @@
     // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
+
         {
             "type": "cppvsdbg",
             "request": "launch",
@@ -60,6 +61,38 @@
             "program": "${workspaceFolder}/target/debug/dvoc_rl_sim",
             "windows": {
                 "program": "${workspaceFolder}/target/debug/dvoc_rl_sim.exe"
+            },
+            "cwd": "${workspaceFolder}",
+            "stopOnEntry": false,
+            "sourceLanguages": ["rust"],
+            "sourceMap": {
+                "/rustc/*": "${env:HOME}/.rustup/toolchains/stable-x86_64-apple-darwin/lib/rustlib/src/rust"
+            }
+        },
+        {
+            "type": "cppvsdbg",
+            "request": "launch",
+            "name": "vsm_rl_sim",
+            "args": [],
+            "program": "${workspaceFolder}/target/debug/vsm_rl_sim",
+            "windows": {
+                "program": "${workspaceFolder}/target/debug/vsm_rl_sim.exe"
+            },
+            "cwd": "${workspaceFolder}",
+            "stopOnEntry": false,
+            "sourceLanguages": ["rust"],
+            "sourceMap": {
+                "/rustc/*": "${env:HOME}/.rustup/toolchains/stable-x86_64-apple-darwin/lib/rustlib/src/rust"
+            }
+        },
+        {
+            "type": "cppvsdbg",
+            "request": "launch",
+            "name": "pll_sim",
+            "args": [],
+            "program": "${workspaceFolder}/target/debug/pll_sim",
+            "windows": {
+                "program": "${workspaceFolder}/target/debug/pll_sim.exe"
             },
             "cwd": "${workspaceFolder}",
             "stopOnEntry": false,
