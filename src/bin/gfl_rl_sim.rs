@@ -3,24 +3,26 @@
 use std::*;
 use plotters::prelude::*;
 use unifi_gfm::calculations::*;
+use unifi_gfm::constants::*;
 use unifi_gfm::dynamics::*;
-use unifi_gfm::gfm::*;
+use unifi_gfm::gfl::*;
 use unifi_gfm::inverter::*;
 use unifi_gfm::pll::*;
 use unifi_gfm::reference_frames::*;
 use unifi_gfm::simulations::*;
-use unifi_gfm::constants::*;
 
-const VOLTAGE_FILE_NAME: &'static str = "images/vsm_rl_sim_voltage.png";
-const THETA_FILE_NAME: &'static str = "images/vsm_rl_sim_thetas.png";
-const POWER_OUT_FILE_NAME: &'static str = "images/vsm_rl_sim_powers.png";
-const CURRENT_OUT_FILE_NAME: &'static str = "images/vsm_rl_sim_currents.png";
-const DELTA_OUT_FILE_NAME: &'static str = "images/vsm_rl_sim_deltas.png";
+const VOLTAGE_FILE_NAME: &'static str = "images/gfl_rl_sim_voltage.png";
+const THETA_FILE_NAME: &'static str = "images/gfl_rl_sim_thetas.png";
+const POWER_OUT_FILE_NAME: &'static str = "images/gfl_rl_sim_powers.png";
+const CURRENT_OUT_FILE_NAME: &'static str = "images/gfl_rl_sim_currents.png";
+const DELTA_OUT_FILE_NAME: &'static str = "images/gfl_rl_sim_deltas.png";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env::set_var("RUST_BACKTRACE", "1");  // Enable backtrace for identifying overflow errors //TODO: Remove this after testing
     /*
     DEFINE SYSTEM PARAMETERS & CONSTRUCT OBJECTS
     */
+
+    // System parameters
     let n_phases = 3.;
     let v_nom: f32 = 80.;
     let f_nom: f32 = 60.;
@@ -28,12 +30,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let s_rated: f32 = 1000.;
     let fs: f32 = 10e3_f32; // Hz
     let dt: f32 = 1. / fs;  // s
-    // vsm parameters
-    let mp: f32 = 0.0026; // / w_nom;  // TODO: Does this coefficient need to be per-unitized? Current values seems to make the response sluggish
-    let mq: f32 = 0.005; // / v_nom;   // TODO: Does this coefficient need to be per-unitized?
-    let h: f32 = 0.002;
-    let j: f32 = (2. * h / w_nom / w_nom) * w_nom;  // TODO: Check Per-unitization
-    let d: f32 = (0.5 / w_nom) * w_nom;
+    let rf = 0.8;  // filter-side resistance
+    let lf = 1.5e-3;  // filter-side inductance
+
+    let i_base = 3. * v_nom / s_rated;
+    let z_base = 3. * v_nom * v_nom / s_rated;
+
+    // gfl parameters
+    let alpha_f_gfl = 2.*PI*100.;
+    let kp_d: f32 = alpha_f_gfl * (lf / z_base); // 
+    let ki_d: f32 = alpha_f_gfl * (rf / z_base); // 
+    let kp_q: f32 = kp_d; // 
+    let ki_q: f32 = ki_d; // 
     // pll parameters
     let bw_pll = 2.*PI*30. / w_nom;
     let phase_margin_pll = 60.;
@@ -41,19 +49,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kp_pll: f32 = bw_pll;
     let ki_pll: f32 = kp_pll/ti_pll;
 
-    let w_c: f32 = 30.*2.*PI;  // TODO: Does this filter frequency need to be per-unitized?
-    let gamma: f32 = 35.;  // TODO: Determine what value should be used for gamma. Too high causes instability, but too low causes sluggish presync
-
-    let rf = 0.8;  // filter-side resistance
-    let lf = 1.5e-3;  // filter-side inductance
-
-    let i_base = 3. * v_nom / s_rated;
-    let z_base = 3. * v_nom * v_nom / s_rated;
-
     let mut pll = SrfPhaseLockedLoop::new(w_nom, kp_pll, ki_pll);
-    let mut inv = build_vsm_controller(v_nom, w_nom, mp, mq, j, d, w_c, &mut pll, n_phases);
-    inv.x[(0)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
-    let mut gfm = add_presynch(&mut inv, gamma);  // Place the droop controller within a GFM interface object
+    let mut inv = build_gfl_controller(v_nom, w_nom, kp_d, ki_d, kp_q, ki_q, lf / z_base, &mut pll, n_phases);
 
     let mut line: RlBranch<f32> = build_rl_branch(i_base, w_nom, rf / z_base, lf / z_base);
     line.open_switch();  // Start with the line disconnected from the ac voltage source
@@ -65,9 +62,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     RUNNING DYNAMICAL SIMULATION
     */
     // Simulation settings
-    let t_end = 0.5;  // Simulate time in seconds
-    let t_step = t_end / 2.; // Active power reference step time
-    let t_switch = t_end / 5.;  // Grid-side switch time
+    let t_end = 1.0;  // Simulate time in seconds
+    let t_p_step = t_end * 0.5; // Active power reference step time
+    let t_q_step = t_end * 0.75; // Reactive power reference step time
+    let t_switch = 0.;  // Grid-side switch time
     let n_steps: u32 = (t_end / dt).ceil() as u32;
     let cont_n_steps = 20;  // Number of steps taken for 'continuous' dynamics for each digital step
     let cont_dt = dt / (cont_n_steps as f32);
@@ -91,12 +89,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ib_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     for step in steps {
         t = step as f32 * dt;
-        if t > t_step {
-            gfm.set_p_ref(1.0);
+        if t > t_p_step {
+            inv.set_p_ref(1.0);
+        }
+
+        if t > t_q_step {
+            inv.set_q_ref(0.2);
         }
 
         // Collect voltage values
-        v_inv = gfm.get_pu_voltage();
+        v_inv = inv.get_pu_voltage();
         v_values[step as usize] = (t, v_inv[0]);
         theta_values[step as usize] = (t, v_inv[1]);
         vg_values[step as usize] = (t, line_to_bus.x[(0)]);
@@ -119,7 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         theta_grid_sample = line_to_bus.x[(1)] * line_to_bus.bus.w_nom;
         let v_grid_sample_alpha_beta = AlphaBeta::from_polar(v_grid_sample, theta_grid_sample);
         // Get alpha-beta gfm voltage
-        let v_inv_alpha_beta = AlphaBeta::from_polar(v_inv[0], v_inv[1] * gfm.ctrl.get_w_nom());
+        let v_inv_alpha_beta = AlphaBeta::from_polar(v_inv[0], v_inv[1] * inv.get_w_nom());
 
         // Step the system
         for n in 0..cont_n_steps {
@@ -131,14 +133,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             // Step the system
             if (t > t_switch) & !line_to_bus.switch_is_closed()  {  // Get inductor grid-side voltage based on switch state
-                gfm.disable_presync();
                 line_to_bus.close_switch();
             }
             line_to_bus.step(cont_dt, [v_inv_alpha_beta.alpha, v_inv_alpha_beta.beta]);
         }
 
         // Step the controller after a z^-1 delay
-        gfm.inv_step(dt, [i_alpha_sample, i_beta_sample, v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta], [v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta]);
+        inv.step(dt, [i_alpha_sample, i_beta_sample, v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta]);
     }
     let v_inv = inv.get_pu_voltage();
     println!("v: {}, theta: {}", v_inv[0], v_inv[1]);
