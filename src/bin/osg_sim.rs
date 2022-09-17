@@ -3,14 +3,16 @@
 use std::*;
 use plotters::prelude::*;
 use unifi_gfm::dynamics::*;
-use unifi_gfm::pll::*;
+use unifi_gfm::osg::*;
 use unifi_gfm::reference_frames::*;
 use unifi_gfm::simulations::*;
 use unifi_gfm::constants::*;
 
-const VOLTAGE_FILE_NAME: &'static str = "images/pll_sim_voltage.png";
-const THETA_FILE_NAME: &'static str = "images/pll_sim_thetas.png";
-const DELTA_OUT_FILE_NAME: &'static str = "images/pll_sim_deltas.png";
+const VOLTAGE_FILE_NAME: &'static str = "images/osg_sim_voltage.png";
+const THETA_FILE_NAME: &'static str = "images/osg_sim_thetas.png";
+const DELTA_OUT_FILE_NAME: &'static str = "images/osg_sim_deltas.png";
+const AB_OUT_FILE_NAME: &'static str = "images/osg_sim_alpha_beta_voltage.png";
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env::set_var("RUST_BACKTRACE", "1");  // Enable backtrace for identifying overflow errors //TODO: Remove this after testing
     /*
@@ -22,14 +24,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fs: f32 = 10e3_f32; // Hz
     let dt: f32 = 1. / fs;  // s
 
-    // pll parameters
-    let bw_pll = 2.*PI*30. / w_nom;
-    let phase_margin_pll = 60.;
-    let ti_pll = libm::tanf(phase_margin_pll*PI/180.)/bw_pll;
-    let kp_pll: f32 = bw_pll;
-    let ki_pll: f32 = kp_pll/ti_pll;
+    // Orthogonal system generator parameters
+    let k_osg = 0.8;
 
-    let mut pll = SrfPhaseLockedLoop::new(w_nom, kp_pll, ki_pll);
+    let mut osg = OrthSigGenSogi::new(w_nom, k_osg, rk2_step);
 
     let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
 
@@ -53,6 +51,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Simulation data vectors
     let mut v_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut theta_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
+    let mut v_alpha_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
+    let mut v_beta_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut vg_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut thetag_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut delta_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
@@ -62,20 +62,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             bus.x[(0)] = 1.1
         }
         if (t >= t_phase_step) & (t < t_phase_step + dt)  {
-            bus.x[(1)] += (5. * PI / 180.) * (1. / f_nom);  // 5 deg phase jump in bus voltage
-            bus.wrap_theta();
+            bus.x[(1)] += (5. * PI / 180.) * (1. / f_nom)  // 5 deg phase jump in bus voltage
         }
 
         // Collect voltage values
-        let pll_output = pll.output([v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta, 0.]);
-        v_values[step as usize] = (t, pll_output[0]);
-        theta_values[step as usize] = (t, pll_output[1]);
+        let osg_output = osg.get_signals();
+        let osg_polar = Polar::from_ab(osg_output[0], osg_output[1], 0.);
+        v_alpha_values[step as usize] = (t, osg_output[0]);
+        v_beta_values[step as usize] = (t, osg_output[1]);
+        v_values[step as usize] = (t, osg_polar.r);
+        theta_values[step as usize] = (t, osg_polar.theta / w_nom);
         vg_values[step as usize] = (t, bus.x[(0)]);
         thetag_values[step as usize] = (t, bus.x[(1)]);
-        delta = pll_output[1] - bus.x[(1)];
-        if delta > (1. / f_nom) - 2e-3 {
+        delta = osg_polar.theta / w_nom - bus.x[(1)];
+        if delta > (1. / f_nom) - 5e-4 {
             delta = -(1. / f_nom) + delta;
-        } else if delta < -(1. / f_nom) + 2e-3  {
+        } else if delta < -(1. / f_nom) + 5e-4  {
             delta = (1. / f_nom) + delta;
         }
         delta_values[step as usize] = (t, delta);
@@ -86,20 +88,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         v_grid_sample_alpha_beta = AlphaBeta::from_polar(v_grid_sample, theta_grid_sample);
 
         // Step the system
-        for _ in 0..cont_n_steps {            
+        for _ in 0..cont_n_steps {
             bus.step(cont_dt, []);
         }
 
         // Step the controller after a z^-1 delay
-        pll.step(dt, [v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta, 0.]);
+        let voltage_sample = SQRT_2 * v_grid_sample * libm::cosf(theta_grid_sample);  // Add delay compensation here? theta + dt / 2. * w_nom
+        osg.step(dt, [voltage_sample]);
     }
-    println!("theta: {}", pll.x[(0)]);
+    let osg_output = osg.get_signals();
+    let osg_polar = Polar::from_ab(osg_output[0], osg_output[1], 0.);
+    println!("v: {}, theta: {}", osg_polar.r, osg_polar.theta / w_nom);
     println!("vg: {}, thetag: {}", bus.x[(0)], bus.x[(1)]);
 
     /*
     PLOTTING THE RESULTS
     */
-
+    
+    let v_alpha_values_ = v_alpha_values.to_vec();
+    let v_beta_values_ = v_beta_values.to_vec();
     let v_values_ = v_values.to_vec();
     let theta_values_ = theta_values.to_vec();
     let vg_values_ = vg_values.to_vec();
@@ -128,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             v_values_,
             &RED,
         ))?
-        .label("Inv Voltage")
+        .label("OSG Voltage")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
     
     chart
@@ -169,7 +176,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             theta_values_,
             &BLUE,
         ))?
-        .label("Inv Theta")
+        .label("OSG Theta")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
 
     chart
@@ -211,6 +218,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))?
         .label("delta")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
+
+    chart
+        .configure_series_labels()
+        .background_style(&WHITE.mix(0.8))
+        .border_style(&BLACK)
+        .draw()?;
+
+    root.present()?;
+
+    /* Plot alpha-beta osg data */
+    // Find the maximum and minimum values of ia and ib for plotting ylims
+    let (_,mut vas): (Vec<f32>, Vec<f32>) = v_alpha_values.into_iter().unzip();
+    let (_,mut vbs): (Vec<_>, Vec<_>) = v_beta_values.into_iter().unzip();
+    vas.append(&mut vbs);
+    let min_i: f32 = vas.iter().fold(0.0f32, |a, &b| a.min(b));
+    let max_i: f32 = vas.iter().fold(0.0f32, |a, &b| a.max(b));
+    let root = BitMapBackend::new(AB_OUT_FILE_NAME, (640, 480)).into_drawing_area();
+    root.fill(&WHITE)?;
+    let mut chart = ChartBuilder::on(&root)
+        .caption("OSG Signals", ("sans-serif", 50).into_font())
+        .margin(5 as u32)
+        .x_label_area_size(30 as u32)
+        .y_label_area_size(30 as u32)
+        .build_cartesian_2d(0.0f32..t_end, (min_i-0.1)..(max_i+0.1))?;
+
+    chart.configure_mesh().draw()?;
+
+    chart
+        .draw_series(LineSeries::new(
+            v_alpha_values_,
+            &RED,
+        ))?
+        .label("va")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
+
+    chart
+        .draw_series(LineSeries::new(
+            v_beta_values_,
+            &BLUE,
+        ))?
+        .label("vb")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLUE));
 
     chart
         .configure_series_labels()
