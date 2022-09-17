@@ -27,10 +27,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let s_rated: f32 = 1000.;
     let fs: f32 = 10e3_f32; // Hz
     let dt: f32 = 1. / fs;  // s
-    let mp: f32 = 0.0026; // / w_nom;  // TODO: Does this coefficient need to be per-unitized? Current values seems to make the response sluggish
-    let mq: f32 = 0.005; // / v_nom;   // TODO: Does this coefficient need to be per-unitized?
-    let w_c: f32 = 30.*2.*PI;  // TODO: Does this filter frequency need to be per-unitized?
-    let gamma: f32 = 35.;  // TODO: Determine what value should be used for gamma. Too high causes instability, but too low causes sluggish presync
 
     let rf = 0.8;  // filter-side resistance
     let lf = 1.5e-3;  // filter-side inductance
@@ -38,6 +34,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let i_base = 3. * v_nom / s_rated;
     let z_base = 3. * v_nom * v_nom / s_rated;
 
+    // droop controller parameters
+    let mp: f32 = 0.0026; // / w_nom;  // TODO: Does this coefficient need to be per-unitized? Current values seems to make the response sluggish
+    let mq: f32 = 0.005; // / v_nom;   // TODO: Does this coefficient need to be per-unitized?
+    let w_c: f32 = 30.*2.*PI;  // TODO: Does this filter frequency need to be per-unitized?
+    
+    // presynchronization parameteres
+    let gamma: f32 = 35.;  // TODO: Determine what value should be used for gamma. Too high causes instability, but too low causes sluggish presync
+
+    // construct controllers and simulation elements
     let mut inv = build_droop_controller(v_nom, w_nom, mp, mq, w_c, n_phases);
     inv.x[(0)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
     let mut gfm = add_presynch(&mut inv, gamma);  // Place the droop controller within a GFM interface object

@@ -11,11 +11,11 @@ use unifi_gfm::simulations::*;
 use unifi_gfm::constants::*;
 
 
-const VOLTAGE_FILE_NAME: &'static str = "images/dvoc_lcl_dlcv_sim_voltage.png";
-const THETA_FILE_NAME: &'static str = "images/dvoc_lcl_dlcv_sim_thetas.png";
-const POWER_OUT_FILE_NAME: &'static str = "images/dvoc_lcl_dlcv_sim_powers.png";
-const CURRENT_OUT_FILE_NAME: &'static str = "images/dvoc_lcl_dlcv_sim_currents.png";
-const DELTA_OUT_FILE_NAME: &'static str = "images/dvoc_lcl_dlcv_sim_deltas.png";
+const VOLTAGE_FILE_NAME: &'static str = "images/droop_lcl_dlcv_sim_voltage.png";
+const THETA_FILE_NAME: &'static str = "images/droop_lcl_dlcv_sim_thetas.png";
+const POWER_OUT_FILE_NAME: &'static str = "images/droop_lcl_dlcv_sim_powers.png";
+const CURRENT_OUT_FILE_NAME: &'static str = "images/droop_lcl_dlcv_sim_currents.png";
+const DELTA_OUT_FILE_NAME: &'static str = "images/droop_lcl_dlcv_sim_deltas.png";
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     /*
     DEFINE SYSTEM PARAMETERS & CONSTRUCT OBJECTS
@@ -27,9 +27,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let s_rated: f32 = 1000.;
     let fs: f32 = 10e3_f32; // Hz
     let dt: f32 = 1. / fs;  // s
-    let xi: f32 = 15.;
-    let c: f32 = 0.2679;
-    let gamma: f32 = 1.; 
 
     let i_base = 3. * v_nom / s_rated;
     let z_base = 3. * v_nom * v_nom / s_rated;
@@ -40,6 +37,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rc = 0.05;  // filter capacitor parasitic resistance
     let rg = 0.4;  // grid-side resistance
     let lg = 1.5e-3;  // grid-side inductance
+
+    // droop controller parameters
+    let mp: f32 = 0.0026; // / w_nom;  // TODO: Does this coefficient need to be per-unitized? Current values seems to make the response sluggish
+    let mq: f32 = 0.005; // / v_nom;   // TODO: Does this coefficient need to be per-unitized?
+    let w_c: f32 = 30.*2.*PI;  // TODO: Does this filter frequency need to be per-unitized?
+    
+    // presynchronization parameters
+    let gamma: f32 = 1.; 
+
+    // double-loop voltage controller paramerters
     //let rv = 0;  // virtual impedance
     //let zf = libm::sqrtf(rf*rf+(lf*w_nom)*(lf*w_nom));  // filter nominal inductance
 
@@ -51,11 +58,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kp_i = 1.*lf*w_cur * (1. / z_base);
     let ki_i = 1.*rf*w_cur * (1. / z_base);  // TODO: Is this per-unitization of scalars here correct? Most concerned about w_nom scaling
 
-    let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c, n_phases);
+    let mut inv = build_droop_controller(v_nom, w_nom, mp, mq, w_c, n_phases);
     let theta0 = 0.0;  // 0.003 for initializing off from grid
-    inv.x[(1)] = theta0;  // Initialize inverter angle to be off from the grid to test presync
-    inv.x[(0)] = 1.0;  // Initialize inverter voltage to be off from v_nom to test presync
-    let inv_ab = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)] * w_nom);  // Grab alpha-beta inv voltage for initializing the LCL filter
+    inv.x[(0)] = theta0;  // Initialize inverter voltage to be off from v_nom to test presync
+    let inv_ab = AlphaBeta::from_polar(1., inv.x[(0)] * w_nom);  // Grab alpha-beta inv voltage for initializing the LCL filter
     let mut gfm = add_presynch(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
     let mut voltage_loop = build_double_loop_voltage_controller(v_nom, kp_v, ki_v, kp_i, ki_i, lf / z_base, cf * z_base, i_base, -i_base);
 
@@ -85,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut v_grid_sample: f32; let mut theta_grid_sample: f32;
     let mut v_grid: f32; let mut theta_grid: f32; 
     let mut v_inv: [f32; 2]; let mut v_cap: [f32; 2] = [inv_ab.alpha, inv_ab.beta]; let mut v_gfm: [f32; 2];
-    let mut dv_dt_gfm:  nalgebra::SVector<f32, 2> = nalgebra::zero();
+    let mut dv_dt_gfm:  nalgebra::SVector<f32, 3> = nalgebra::zero();
     let mut v_inv_alpha_beta: AlphaBeta<f32>; let mut v_cap_alpha_beta: AlphaBeta<f32>; 
     let mut v_grid_sample_alpha_beta: AlphaBeta<f32>; let mut v_to_alpha_beta: AlphaBeta<f32>;
     let mut i_fr: [f32; 2]; let mut i_to: [f32; 2]; let mut v_inv_dq: [f32; 2]; let mut v_inv_polar: Polar<f32>; 
@@ -104,7 +110,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ia_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     let mut ib_values: Vec<(f32, f32)> = vec![(0., 0.); (n_steps+1) as usize];
     // TEST: Using step_output for DLVC
-    let mut t_pause = 0.446;
     v_gfm = gfm.get_pu_voltage();
     v_inv_dq = voltage_loop.output([v_gfm[0] * SQRT_2, dv_dt_gfm[(1)] * w_nom, vc_dq.d, vc_dq.q, if_dq.d, if_dq.q, ig_dq.d, ig_dq.q]);
 
@@ -112,9 +117,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         t = step as f32 * dt;
         if t > t_step {
             gfm.set_p_ref(1.0);
-        }
-        if t > t_pause {
-            t_pause += 0.001;
         }
 
         // Get inverter output voltage from voltage-loop and convert to polar
@@ -161,7 +163,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Calculate power
             let v = AlphaBeta::from_ab_(line_to_bus.x[(4)], line_to_bus.x[(5)]);
             let i = AlphaBeta::from_ab_(line_to_bus.x[(6)], line_to_bus.x[(7)]);
-            (p, q) = calc_ab_power(&v, &i, n_phases);  // Calculate power at PCC
+            (p, q) = calc_ab_power(&v, &i, n_phases);
             p_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, p);
             q_values[(cont_n_steps*step + n) as usize] = (t + (n as f32)*cont_dt, q);
             
