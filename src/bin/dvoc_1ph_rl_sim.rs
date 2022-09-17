@@ -35,15 +35,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dt: f32 = 1. / fs;  // s
 
     // Orthogonal system generator parameters
-    let k_osg = 0.8;
+    let k_osg = 2.0;
 
     // dVOC parameters
     let xi: f32 = 15.;
     let c: f32 = 0.2679;
     let gamma: f32 = 1.; 
 
-
-
+    // construct controllers
     let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c, n_phases);
     inv.x[(1)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
     inv.x[(0)] = 1.1;  // Initialize inverter voltage to be off from v_nom to test presync
@@ -52,6 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut vg_osg = OrthSigGenSogi::new(w_nom, k_osg, rk2_step);
     let mut i_osg = OrthSigGenSogi::new(w_nom, k_osg, rk2_step);
 
+    // construct simulation elements
     let mut line: RlBranch<f32> = build_rl_branch(i_base, w_nom, rf / z_base, lf / z_base);
     line.open_switch();  // Start with the line disconnected from the ac voltage source
     let bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     RUNNING DYNAMICAL SIMULATION
     */
     // Simulation settings
-    let t_end = 2.0;  // Simulate time in seconds
+    let t_end = 0.5;  // Simulate time in seconds
     let t_step = t_end / 2.; // Active power reference step time
     let t_switch = t_end / 5.;  // Grid-side switch time
     let n_steps: u32 = (t_end / dt).ceil() as u32;
@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut t: f32;
     let mut p: f32 = 0.; let mut q: f32 = 0.; let mut delta: f32; 
     let mut i_alpha_sample: f32; let mut i_beta_sample: f32;
-    let mut v_grid_sample: f32; let mut theta_grid_sample: f32;
+    let mut v_grid_sample: f32; let mut theta_grid_sample: f32; let mut voltage_sample: f32;
     let mut v_grid: f32; let mut theta_grid: f32; let mut v_inv: [f32; 2];
     let mut v_to_alpha_beta: AlphaBeta<f32>;
     // Simulation data vectors
@@ -101,9 +101,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ia_values[step as usize] = (t, line_to_bus.x[(2)]);
         ib_values[step as usize] = (t, line_to_bus.x[(3)]);
         delta = v_inv[1] - line_to_bus.x[(1)];
-        if delta > (1. / f_nom) {
+        if delta > (1. / f_nom - 5.0e-4) {
             delta = -(1. / f_nom) + delta;
-        } else if delta < -(1. / f_nom - 1.0e-4) {
+        } else if delta < -(1. / f_nom - 5.0e-4) {
             delta = (1. / f_nom) + delta;
         }
         delta_values[step as usize] = (t, delta);
@@ -135,7 +135,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Step the orth-sign-gen and controller after a z^-1 delay using only single-phase data
-        vg_osg.step(dt, [v_grid_sample * libm::cosf(theta_grid_sample)]);  // Calculate sampled single-phase signals
+        voltage_sample = SQRT_2 * v_grid_sample * libm::cosf(theta_grid_sample);
+        vg_osg.step(dt, [voltage_sample]);  // Calculate sampled single-phase signals
         i_osg.step(dt, [i_alpha_sample]);
         gfm.inv_step(dt, [i_osg.x[(0)], i_osg.x[(1)]], [vg_osg.x[(0)], vg_osg.x[(1)]]);
     }

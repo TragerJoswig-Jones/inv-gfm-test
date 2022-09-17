@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dt: f32 = 1. / fs;  // s
 
     // Orthogonal system generator parameters
-    let k_osg = 0.8;
+    let k_osg = 2.0;
 
     let mut osg = OrthSigGenSogi::new(w_nom, k_osg, rk2_step);
 
