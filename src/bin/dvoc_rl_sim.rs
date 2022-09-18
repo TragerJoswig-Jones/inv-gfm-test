@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     /*
     DEFINE SYSTEM PARAMETERS & CONSTRUCT OBJECTS
     */
+    // system parameters
     let n_phases = 3.;
     let v_nom: f32 = 80.;
     let f_nom: f32 = 60.;
@@ -27,9 +28,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let s_rated: f32 = 1000.;
     let fs: f32 = 10e3_f32; // Hz
     let dt: f32 = 1. / fs;  // s
-    let xi: f32 = 15.;
-    let c: f32 = 0.2679;
-    let gamma: f32 = 1.; 
 
     let rf = 0.8;  // filter-side resistance
     let lf = 1.5e-3;  // filter-side inductance
@@ -37,6 +35,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let i_base = 3. * v_nom / s_rated;
     let z_base = 3. * v_nom * v_nom / s_rated;
 
+    // dVOC control parameters
+    let xi: f32 = 15.;
+    let c: f32 = 0.2679;
+
+    // presynchronization parameters
+    let gamma: f32 = 1.; 
+
+    // construct system
     let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c, n_phases);
     inv.x[(1)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
     inv.x[(0)] = 1.1;  // Initialize inverter voltage to be off from v_nom to test presync

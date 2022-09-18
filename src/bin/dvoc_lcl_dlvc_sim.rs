@@ -25,14 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let f_nom: f32 = 60.;
     let w_nom: f32 = f_nom * 2.*PI;
     let s_rated: f32 = 1000.;
-    let fs: f32 = 10e3_f32; // Hz
-    let dt: f32 = 1. / fs;  // s
-    let xi: f32 = 15.;
-    let c: f32 = 0.2679;
-    let gamma: f32 = 1.; 
-
-    let i_base = 3. * v_nom / s_rated;
-    let z_base = 3. * v_nom * v_nom / s_rated;
+    let dt: f32 = 1.0e-4_f32;
 
     let rf = 0.4;  // filter-side resistance
     let lf = 1.5e-3;  // filter-side inductance
@@ -40,6 +33,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rc = 0.05;  // filter capacitor parasitic resistance
     let rg = 0.4;  // grid-side resistance
     let lg = 1.5e-3;  // grid-side inductance
+
+    let i_base = 3. * v_nom / s_rated;
+    let z_base = 3. * v_nom * v_nom / s_rated;
+
+    // dVOC control parameters
+    let xi: f32 = 15.;
+    let c: f32 = 0.75; // 0.2679;
+
+    // presynchronization parameters
+    let gamma: f32 = 1.; 
+
+    // double-loop voltage controller paramerters
     //let rv = 0;  // virtual impedance
     //let zf = libm::sqrtf(rf*rf+(lf*w_nom)*(lf*w_nom));  // filter nominal inductance
 
