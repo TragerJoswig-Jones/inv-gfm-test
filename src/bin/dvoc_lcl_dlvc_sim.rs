@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rg = 0.4;  // grid-side resistance
     let lg = 1.5e-3;  // grid-side inductance
 
-    let i_base = 3. * v_nom / s_rated;
+    let i_base = s_rated / (3. * v_nom);
     let z_base = 3. * v_nom * v_nom / s_rated;
 
     // dVOC control parameters
@@ -56,13 +56,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kp_i = 1.*lf*w_cur * (1. / z_base);
     let ki_i = 1.*rf*w_cur * (1. / z_base);  // TODO: Is this per-unitization of scalars here correct? Most concerned about w_nom scaling
 
-    let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c, n_phases);
+    let mut inv = DvocController::new(v_nom, w_nom, xi, c, n_phases, rk2_step);
     let theta0 = 0.0;  // 0.003 for initializing off from grid
     inv.x[(1)] = theta0;  // Initialize inverter angle to be off from the grid to test presync
     inv.x[(0)] = 1.0;  // Initialize inverter voltage to be off from v_nom to test presync
     let inv_ab = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)] * w_nom);  // Grab alpha-beta inv voltage for initializing the LCL filter
     let mut gfm = add_presynch(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object
-    let mut voltage_loop = build_double_loop_voltage_controller(v_nom, kp_v, ki_v, kp_i, ki_i, lf / z_base, cf * z_base, i_base, -i_base);
+    let mut voltage_loop = DlvController::new(kp_v, ki_v, kp_i, ki_i, lf / z_base, cf * z_base, i_base, -i_base);
 
     let mut line: LclFilter<f32> = build_lcl_filter(w_nom, i_base, v_nom, rf / z_base, lf / z_base, rc / z_base, cf * z_base, rg / z_base, lg / z_base);
     line.open_switch();  // Start with the line disconnected from the ac voltage source
@@ -88,11 +88,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut p: f32 = 0.; let mut q: f32 = 0.; let mut delta: f32; 
     let mut i_alpha_sample: f32; let mut i_beta_sample: f32;
     let mut v_grid_sample: f32; let mut theta_grid_sample: f32;
-    let mut v_grid: f32; let mut theta_grid: f32; 
     let mut v_inv: [f32; 2]; let mut v_cap: [f32; 2] = [inv_ab.alpha, inv_ab.beta]; let mut v_gfm: [f32; 2];
     let mut dv_dt_gfm:  nalgebra::SVector<f32, 2> = nalgebra::zero();
-    let mut v_inv_alpha_beta: AlphaBeta<f32>; let mut v_cap_alpha_beta: AlphaBeta<f32>; 
-    let mut v_grid_sample_alpha_beta: AlphaBeta<f32>; let mut v_to_alpha_beta: AlphaBeta<f32>;
     let mut i_fr: [f32; 2]; let mut i_to: [f32; 2]; let mut v_inv_dq: [f32; 2]; let mut v_inv_polar: Polar<f32>; 
     let mut sin_cos = SinCos::from_theta(theta0 * w_nom); let mut vc_dq = inv_ab.to_dqz(&sin_cos); 
     let mut if_dq = DQZ{d:0., q:0., z:0.}; let mut ig_dq: DQZ<f32> = DQZ{d:0., q:0., z:0.};
@@ -181,7 +178,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Step the controller after a z^-1 delay
         dv_dt_gfm = gfm.inv_step(dt, [i_alpha_sample, i_beta_sample], [v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta]);
         v_cap = [line_to_bus.x[(4)], line_to_bus.x[(5)]];  // TODO: Add methods to line to bus to get these values (How to address LCL filter having a voltage? )
-        let v_cap_polar_test = Polar::from_ab(v_cap[0], v_cap[1], 0.);
         i_fr = [line_to_bus.x[(2)], line_to_bus.x[(3)]];
         i_to = [line_to_bus.x[(6)], line_to_bus.x[(7)]];
         v_gfm = gfm.get_pu_voltage();  // TEST: Using updated theta for stepping DLVC

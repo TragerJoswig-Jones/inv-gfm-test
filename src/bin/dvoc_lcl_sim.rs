@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rg = 0.4;  // grid-side resistance
     let lg = 1.5e-3;  // grid-side inductance
 
-    let i_base = 3. * v_nom / s_rated;
+    let i_base = s_rated / (3. * v_nom);
     let z_base = 3. * v_nom * v_nom / s_rated;
 
     // dVOC control parameters
@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gamma: f32 = 1.; 
 
     // construct system
-    let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c, n_phases);
+    let mut inv = DvocController::new(v_nom, w_nom, xi, c, n_phases, rk2_step);
     inv.x[(1)] = 0.;//0.003;  // Initialize inverter angle to be off from the grid to test presync
     inv.x[(0)] = 1.;//1.1;  // Initialize inverter voltage to be off from v_nom to test presync
     let inv_ab = AlphaBeta::from_polar(inv.x[(0)], inv.x[(1)]);  // Grab alpha-beta inv voltage for initializing the LCL filter

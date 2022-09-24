@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c = 1e-2;  // dc-side capacitance
     let rc = 1e-3;  // dc-side leakage resistance
 
-    let i_base = 3. * v_nom / s_rated;
+    let i_base = s_rated / (3. * v_nom);
     let z_base = 3. * v_nom * v_nom / s_rated;
 
     // droop controller parameters
@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ki_dc: f32 = 10.;
 
     // construct controllers and simulation elements
-    let mut inv = build_droop_controller(v_nom, w_nom, mp, mq, w_c, n_phases);
+    let mut inv = DroopController::new(v_nom, w_nom, mp, mq, w_c, n_phases, rk2_step);
     inv.x[(0)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
     let mut gfm = add_presynch(&mut inv, gamma);  // Place the droop controller within a GFM interface object
 

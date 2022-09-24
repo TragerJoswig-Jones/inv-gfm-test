@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kp_pll: f32 = bw_pll;
     let ki_pll: f32 = kp_pll/ti_pll;
 
-    let mut pll = SrfPhaseLockedLoop::new(w_nom, kp_pll, ki_pll);
+    let mut pll = SrfPhaseLockedLoop::new(w_nom, kp_pll, ki_pll, rk2_step);
 
     let mut bus: AcVoltSrc<f32> = build_ac_volt_src(v_nom, w_nom);
 
@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Collect voltage values
-        let pll_output = pll.output([v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta, 0.]);
+        let pll_output = pll.output([v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta]);
         v_values[step as usize] = (t, pll_output[0]);
         theta_values[step as usize] = (t, pll_output[1]);
         vg_values[step as usize] = (t, bus.x[(0)]);
@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Step the controller after a z^-1 delay
-        pll.step(dt, [v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta, 0.]);
+        pll.step(dt, [v_grid_sample_alpha_beta.alpha, v_grid_sample_alpha_beta.beta]);
     }
     println!("theta: {}", pll.x[(0)]);
     println!("vg: {}, thetag: {}", bus.x[(0)], bus.x[(1)]);

@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let kp_pll: f32 = bw_pll;
     let ki_pll: f32 = kp_pll/ti_pll;
 
-    let mut pll = SrfPhaseLockedLoop::new(w_nom, kp_pll, ki_pll);
+    let mut pll = SrfPhaseLockedLoop::new(w_nom, kp_pll, ki_pll, rk2_step);
     let mut inv = build_gfl_controller(v_nom, w_nom, kp_d, ki_d, kp_q, ki_q, lf / z_base, &mut pll, n_phases);
 
     let mut line: RlBranch<f32> = build_rl_branch(i_base, w_nom, rf / z_base, lf / z_base);

@@ -50,8 +50,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let i_base = 3. * v_nom / s_rated;
     let z_base = 3. * v_nom * v_nom / s_rated;
 
-    let mut pll = SrfPhaseLockedLoop::new(w_nom, kp_pll, ki_pll);
-    let mut inv = build_vsm_controller(v_nom, w_nom, mp, mq, j, d, w_c, &mut pll, n_phases);
+    let mut pll = SrfPhaseLockedLoop::new(w_nom, kp_pll, ki_pll, rk2_step);
+    let mut inv = VsmController::new(v_nom, w_nom, mp, mq, j, d, w_c, &mut pll, n_phases, rk2_step);
     inv.x[(0)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
     let mut gfm = add_presynch(&mut inv, gamma);  // Place the droop controller within a GFM interface object
 

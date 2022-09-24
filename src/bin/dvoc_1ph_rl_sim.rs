@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gamma: f32 = 1.; 
 
     // construct controllers
-    let mut inv = build_dvoc_controller(v_nom, w_nom, xi, c, n_phases);
+    let mut inv = DvocController::new(v_nom, w_nom, xi, c, n_phases, rk2_step);
     inv.x[(1)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
     inv.x[(0)] = 1.1;  // Initialize inverter voltage to be off from v_nom to test presync
     let mut gfm = add_presynch(&mut inv, gamma);  // Place the dVOC controller within a GFM interface object

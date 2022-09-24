@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gamma: f32 = 35.;  // TODO: Determine what value should be used for gamma. Too high causes instability, but too low causes sluggish presync
 
     // construct controllers and simulation elements
-    let mut inv = build_droop_controller(v_nom, w_nom, mp, mq, w_c, n_phases);
+    let mut inv = DroopController::new(v_nom, w_nom, mp, mq, w_c, n_phases, rk2_step);
     inv.x[(0)] = 0.005;  // Initialize inverter angle to be off from the grid to test presync
     let mut gfm = add_presynch(&mut inv, gamma);  // Place the droop controller within a GFM interface object
 
